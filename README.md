@@ -41,7 +41,6 @@ pytest
 
 ## Project Status
 
-Currently on **Step 1.1 — bare project skeleton** (no database models, DB
-connection, routes, or business logic yet). This project is being built in
-small, reviewed phases — see `CLAUDE.md` for the full roadmap and current
-phase.
+Currently on **Step 1.3 — core models (User, Patient)**. This project is
+being built in small, reviewed phases — see `CLAUDE.md` for the full
+roadmap and current phase.

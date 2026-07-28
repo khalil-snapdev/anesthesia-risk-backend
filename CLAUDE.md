@@ -150,4 +150,4 @@ go-ahead before starting the next phase. Each phase should end with a
 passing test suite and a clean git status ready to commit.
 
 ## Current Phase
-Step 1.1 — bare project skeleton (no models, no DB connection, no routes yet)
+Step 1.3 — core models (User, Patient)
