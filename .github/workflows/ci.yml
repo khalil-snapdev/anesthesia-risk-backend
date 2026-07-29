@@ -37,4 +37,5 @@ jobs:
           MONGODB_URI: "mongodb://localhost:27017/test"
           ENVIRONMENT: "test"
           LOG_LEVEL: "INFO"
+          GOOGLE_CLIENT_ID: "dummy-client-id.apps.googleusercontent.com"
         run: pytest --cov=app --cov-report=term-missing
