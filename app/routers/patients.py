@@ -10,7 +10,7 @@ from pymongo.asynchronous.client_session import AsyncClientSession
 from app.auth.dependencies import get_current_user, require_role
 from app.database import get_db_client
 from app.exceptions import AppException
-from app.models.audit_log import AuditAction
+from app.models.audit_log import AuditAction, AuditLogEntry
 from app.models.embedded import (
     ActorSnapshot,
     AlertSeverity,
@@ -24,6 +24,7 @@ from app.models.embedded import (
 )
 from app.models.patient import Patient, Sex
 from app.models.user import User
+from app.schemas.audit import AuditLogEntryRead
 from app.schemas.patient import (
     CalculateRiskRequest,
     ExamFindingUpdate,
@@ -149,7 +150,14 @@ async def _create_patient_from_truform(
             actor=actor,
             changes={
                 "before": None,
-                "after": {"full_name": patient.full_name, "source": "truform"},
+                "after": {
+                    "full_name": patient.full_name,
+                    "dob": patient.dob.isoformat(),
+                    "sex": patient.sex.value,
+                    "surgery_date": patient.surgery_date.isoformat(),
+                    "patient_identifier": patient.patient_identifier,
+                    "source": "truform",
+                },
             },
         )
         return patient
@@ -186,7 +194,16 @@ async def create_patient(
             entity_id=str(patient.id),
             action=AuditAction.CREATE,
             actor=actor,
-            changes={"before": None, "after": {"full_name": patient.full_name}},
+            changes={
+                "before": None,
+                "after": {
+                    "full_name": patient.full_name,
+                    "dob": patient.dob.isoformat(),
+                    "sex": patient.sex.value,
+                    "surgery_date": patient.surgery_date.isoformat(),
+                    "patient_identifier": patient.patient_identifier,
+                },
+            },
         )
         return patient
 
@@ -209,6 +226,23 @@ async def list_patients(
 async def get_patient(patient_id: str) -> PatientRead:
     patient = await _get_patient_or_404(patient_id)
     return PatientRead.from_patient(patient)
+
+
+@router.get("/{patient_id}/audit-log", response_model=list[AuditLogEntryRead])
+async def get_patient_audit_log(
+    patient_id: str,
+    current_user: User = Depends(require_role("surgeon", "nurse")),
+) -> list[AuditLogEntryRead]:
+    # Surgeon/nurse only per CLAUDE.md's Roles section — office staff get
+    # no clinical detail or alert visibility, and audit history is the
+    # same tier of detail.
+    patient = await _get_patient_or_404(patient_id)
+    entries = (
+        await AuditLogEntry.find(AuditLogEntry.entity_id == str(patient.id))
+        .sort("-timestamp")
+        .to_list()
+    )
+    return [AuditLogEntryRead.from_entry(entry) for entry in entries]
 
 
 @router.patch("/{patient_id}/intake", response_model=PatientRead)
@@ -299,6 +333,14 @@ async def calculate_risk(
 ) -> PatientRead:
     patient = await _get_patient_or_404(patient_id)
 
+    before_risk_assessment = (
+        patient.risk_assessment.model_dump(mode="json") if patient.risk_assessment else None
+    )
+    before_recommendation_set = (
+        patient.recommendation_set.model_dump(mode="json") if patient.recommendation_set else None
+    )
+    before_alerts = [alert.model_dump(mode="json") for alert in patient.alerts]
+
     stop_bang_score, stop_bang_level = calculate_stop_bang(
         snoring=payload.snoring,
         tired=payload.tired,
@@ -378,10 +420,15 @@ async def calculate_risk(
             action=AuditAction.UPDATE,
             actor=payload.calculated_by,
             changes={
-                "before": None,
+                "before": {
+                    "risk_assessment": before_risk_assessment,
+                    "recommendation_set": before_recommendation_set,
+                    "alerts": before_alerts,
+                },
                 "after": {
                     "risk_assessment": risk_assessment.model_dump(mode="json"),
                     "recommendation_set": recommendation_set.model_dump(mode="json"),
+                    "alerts": [alert.model_dump(mode="json") for alert in merged_alerts],
                 },
             },
         )
@@ -404,6 +451,21 @@ async def acknowledge_alert(
     if target_alert is None:
         raise AppException("Alert not found", status_code=404)
 
+    before_snapshot = {
+        "alert_id": alert_id,
+        "alert_type": target_alert.alert_type.value,
+        "message": target_alert.message,
+        "acknowledged": target_alert.acknowledged,
+        "acknowledged_by": (
+            target_alert.acknowledged_by.model_dump(mode="json")
+            if target_alert.acknowledged_by
+            else None
+        ),
+        "acknowledged_at": (
+            target_alert.acknowledged_at.isoformat() if target_alert.acknowledged_at else None
+        ),
+    }
+
     ack_time = datetime.now(UTC)
 
     async def _txn(session: AsyncClientSession) -> Patient:
@@ -418,8 +480,15 @@ async def acknowledge_alert(
             action=AuditAction.UPDATE,
             actor=payload,
             changes={
-                "before": {"alert_id": alert_id, "acknowledged": False},
-                "after": {"alert_id": alert_id, "acknowledged": True},
+                "before": before_snapshot,
+                "after": {
+                    "alert_id": alert_id,
+                    "alert_type": target_alert.alert_type.value,
+                    "message": target_alert.message,
+                    "acknowledged": True,
+                    "acknowledged_by": payload.model_dump(mode="json"),
+                    "acknowledged_at": ack_time.isoformat(),
+                },
             },
         )
         return patient

@@ -13,6 +13,7 @@ from app.auth.jwt_handler import create_access_token
 from app.database import get_db_client
 from app.main import app
 from app.models import AuditLogEntry, Patient, User, document_models
+from app.models.audit_log import AuditAction
 from app.models.embedded import (
     ActorSnapshot,
     Alert,
@@ -132,6 +133,19 @@ def _patch_writes_as_no_ops(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(Patient, "insert", AsyncMock(return_value=None))
     monkeypatch.setattr(Patient, "save", AsyncMock(return_value=None))
     monkeypatch.setattr(AuditLogEntry, "insert", AsyncMock(return_value=None))
+
+
+def _mock_record_audit_entry(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """Patch record_audit_entry as imported into the router module.
+
+    Patching AuditLogEntry.insert directly can't assert on entry content:
+    AsyncMock doesn't bind `self`, so it never receives the constructed
+    entry object, only the `session=` kwarg. Patching the function that
+    builds the entry lets tests inspect call_args.kwargs instead.
+    """
+    mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(patients_router, "record_audit_entry", mock)
+    return mock
 
 
 def _auth_headers_for(user: User) -> dict[str, str]:
@@ -303,6 +317,7 @@ class TestCreatePatient:
         owner = make_user()
         monkeypatch.setattr(User, "get", AsyncMock(return_value=owner))
         _patch_writes_as_no_ops(monkeypatch)
+        audit_mock = _mock_record_audit_entry(monkeypatch)
 
         response = await client.post(
             "/patients",
@@ -321,6 +336,22 @@ class TestCreatePatient:
         assert body["created_by"] == str(owner.id)
         assert body["patient_identifier"].startswith("PT-")
         assert body["is_deleted"] is False
+
+        audit_mock.assert_awaited_once()
+        audit_kwargs = audit_mock.call_args.kwargs
+        assert audit_kwargs["entity_type"] == "Patient"
+        assert audit_kwargs["entity_id"] == body["id"]
+        assert audit_kwargs["action"] == AuditAction.CREATE
+        assert audit_kwargs["actor"].user_id == str(owner.id)
+        assert audit_kwargs["actor"].role == "nurse"
+        assert audit_kwargs["changes"]["before"] is None
+        assert audit_kwargs["changes"]["after"] == {
+            "full_name": "New Patient",
+            "dob": "1985-03-10",
+            "sex": "female",
+            "surgery_date": "2026-09-01",
+            "patient_identifier": body["patient_identifier"],
+        }
 
     @pytest.mark.asyncio
     async def test_returns_404_when_created_by_user_missing(
@@ -584,6 +615,7 @@ class TestCalculateRisk:
         patient = make_patient()
         monkeypatch.setattr(Patient, "get", AsyncMock(return_value=patient))
         _patch_writes_as_no_ops(monkeypatch)
+        audit_mock = _mock_record_audit_entry(monkeypatch)
 
         response = await client.post(
             f"/patients/{patient.id}/calculate-risk", json=self._valid_payload()
@@ -609,6 +641,64 @@ class TestCalculateRisk:
 
         alert_types = {a["alert_type"] for a in body["alerts"]}
         assert alert_types == {"anticoagulant", "severe_allergy", "osa"}
+
+        audit_mock.assert_awaited_once()
+        audit_kwargs = audit_mock.call_args.kwargs
+        assert audit_kwargs["entity_type"] == "Patient"
+        assert audit_kwargs["action"] == AuditAction.UPDATE
+        assert audit_kwargs["actor"].full_name == "Sam Surgeon"
+        # A first-time calculation has no prior state.
+        assert audit_kwargs["changes"]["before"] == {
+            "risk_assessment": None,
+            "recommendation_set": None,
+            "alerts": [],
+        }
+        after = audit_kwargs["changes"]["after"]
+        assert after["risk_assessment"]["overall_risk_category"] == "high"
+        assert {a["alert_type"] for a in after["alerts"]} == {
+            "anticoagulant",
+            "severe_allergy",
+            "osa",
+        }
+
+    @pytest.mark.asyncio
+    async def test_audit_entry_captures_prior_state_on_recalculation(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        prior_risk_assessment = RiskAssessment(
+            asa_class="II",
+            asa_suggested=True,
+            stop_bang_score=2,
+            stop_bang_level=RiskLevel.LOW,
+            rcri_score=0,
+            rcri_level=RiskLevel.LOW,
+            overall_risk_category=RiskLevel.LOW,
+        )
+        existing_alert = Alert(
+            alert_type=AlertType.ANTICOAGULANT,
+            message="Patient is on anticoagulant medication: Warfarin",
+            severity=AlertSeverity.CRITICAL,
+        )
+        patient = make_patient(risk_assessment=prior_risk_assessment, alerts=[existing_alert])
+        monkeypatch.setattr(Patient, "get", AsyncMock(return_value=patient))
+        _patch_writes_as_no_ops(monkeypatch)
+        audit_mock = _mock_record_audit_entry(monkeypatch)
+
+        response = await client.post(
+            f"/patients/{patient.id}/calculate-risk", json=self._valid_payload()
+        )
+
+        assert response.status_code == 200
+        audit_kwargs = audit_mock.call_args.kwargs
+        before = audit_kwargs["changes"]["before"]
+        assert before["risk_assessment"]["overall_risk_category"] == "low"
+        assert before["risk_assessment"]["stop_bang_score"] == 2
+        assert len(before["alerts"]) == 1
+        assert before["alerts"][0]["alert_type"] == "anticoagulant"
+        # The recalculation itself produces a HIGH-risk profile — before
+        # must reflect the prior LOW state, not the freshly-calculated one.
+        after = audit_kwargs["changes"]["after"]
+        assert after["risk_assessment"]["overall_risk_category"] == "high"
 
     @pytest.mark.asyncio
     async def test_uses_stored_exam_finding_mallampati_for_airway_alert(
@@ -682,6 +772,7 @@ class TestAcknowledgeAlert:
         patient = make_patient(alerts=[alert])
         monkeypatch.setattr(Patient, "get", AsyncMock(return_value=patient))
         _patch_writes_as_no_ops(monkeypatch)
+        audit_mock = _mock_record_audit_entry(monkeypatch)
 
         response = await client.patch(
             f"/patients/{patient.id}/alerts/{alert.id}/acknowledge",
@@ -694,6 +785,21 @@ class TestAcknowledgeAlert:
         assert acked["acknowledged"] is True
         assert acked["acknowledged_by"]["full_name"] == "Nora Nurse"
         assert acked["acknowledged_at"] is not None
+
+        audit_mock.assert_awaited_once()
+        audit_kwargs = audit_mock.call_args.kwargs
+        assert audit_kwargs["entity_type"] == "Patient"
+        assert audit_kwargs["action"] == AuditAction.UPDATE
+        assert audit_kwargs["actor"].full_name == "Nora Nurse"
+        before = audit_kwargs["changes"]["before"]
+        assert before["alert_id"] == alert.id
+        assert before["alert_type"] == "osa"
+        assert before["acknowledged"] is False
+        assert before["acknowledged_by"] is None
+        after = audit_kwargs["changes"]["after"]
+        assert after["acknowledged"] is True
+        assert after["acknowledged_by"]["full_name"] == "Nora Nurse"
+        assert after["acknowledged_at"] is not None
 
     @pytest.mark.asyncio
     async def test_returns_404_when_patient_not_found(
@@ -788,6 +894,7 @@ class TestCreatePatientFromTruform:
         owner = make_user()
         monkeypatch.setattr(User, "get", AsyncMock(return_value=owner))
         _patch_writes_as_no_ops(monkeypatch)
+        audit_mock = _mock_record_audit_entry(monkeypatch)
 
         response = await client.post(
             "/patients/from-truform",
@@ -815,6 +922,20 @@ class TestCreatePatientFromTruform:
         ):
             assert field in result["missing_for_scoring"]
         assert "insurance_provider_name" in result["unmapped_fields"]
+
+        audit_mock.assert_awaited_once()
+        audit_kwargs = audit_mock.call_args.kwargs
+        assert audit_kwargs["entity_type"] == "Patient"
+        assert audit_kwargs["action"] == AuditAction.CREATE
+        assert audit_kwargs["actor"].user_id == str(owner.id)
+        assert audit_kwargs["changes"]["after"] == {
+            "full_name": "John Doe",
+            "dob": "1968-03-15",
+            "sex": "male",
+            "surgery_date": "2026-09-01",
+            "patient_identifier": result["patient"]["patient_identifier"],
+            "source": "truform",
+        }
 
     @pytest.mark.asyncio
     async def test_returns_404_when_created_by_user_missing(
@@ -964,6 +1085,7 @@ class TestPollTruform:
         owner = make_user()
         monkeypatch.setattr(User, "get", AsyncMock(return_value=owner))
         _patch_writes_as_no_ops(monkeypatch)
+        audit_mock = _mock_record_audit_entry(monkeypatch)
         monkeypatch.setattr(
             patients_router,
             "fetch_pending_submissions",
@@ -980,6 +1102,12 @@ class TestPollTruform:
         assert len(body["created"]) == 1
         assert body["created"][0]["patient"]["full_name"] == "John Doe"
         assert body["skipped"] == []
+
+        audit_mock.assert_awaited_once()
+        audit_kwargs = audit_mock.call_args.kwargs
+        assert audit_kwargs["action"] == AuditAction.CREATE
+        assert audit_kwargs["entity_type"] == "Patient"
+        assert audit_kwargs["changes"]["after"]["source"] == "truform"
 
     @pytest.mark.asyncio
     async def test_skips_pending_submission_missing_a_derivable_name(
@@ -1132,3 +1260,117 @@ class TestExportLabOrder:
         )
 
         assert response.status_code == 404
+
+
+class _FakeAuditFindQuery:
+    def __init__(self, entries: list[AuditLogEntry]) -> None:
+        self._entries = entries
+        self.sort_args: tuple[Any, ...] | None = None
+
+    def sort(self, *args: Any) -> "_FakeAuditFindQuery":
+        self.sort_args = args
+        return self
+
+    async def to_list(self) -> list[AuditLogEntry]:
+        return self._entries
+
+
+class TestGetPatientAuditLog:
+    @pytest.mark.asyncio
+    async def test_returns_entries_newest_first(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        patient = make_patient()
+        monkeypatch.setattr(Patient, "get", AsyncMock(return_value=patient))
+
+        actor = make_actor_snapshot()
+        older = AuditLogEntry(
+            id=ObjectId(),
+            entity_type="Patient",
+            entity_id=str(patient.id),
+            action=AuditAction.CREATE,
+            actor=actor,
+            changes={"before": None, "after": {"full_name": patient.full_name}},
+            timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        newer = AuditLogEntry(
+            id=ObjectId(),
+            entity_type="Patient",
+            entity_id=str(patient.id),
+            action=AuditAction.UPDATE,
+            actor=actor,
+            changes={"before": {"notes": None}, "after": {"notes": "hi"}},
+            timestamp=datetime(2026, 6, 1, tzinfo=UTC),
+        )
+        fake_query = _FakeAuditFindQuery([newer, older])
+        monkeypatch.setattr(AuditLogEntry, "find", MagicMock(return_value=fake_query))
+
+        nurse = make_user(role=Role.NURSE)
+        _mock_current_user(monkeypatch, nurse)
+
+        response = await client.get(
+            f"/patients/{patient.id}/audit-log", headers=_auth_headers_for(nurse)
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body) == 2
+        assert body[0]["action"] == "update"
+        assert body[1]["action"] == "create"
+
+        assert fake_query.sort_args == ("-timestamp",)
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_list_for_patient_with_no_history(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        patient = make_patient()
+        monkeypatch.setattr(Patient, "get", AsyncMock(return_value=patient))
+        monkeypatch.setattr(AuditLogEntry, "find", MagicMock(return_value=_FakeAuditFindQuery([])))
+
+        surgeon = make_user(role=Role.SURGEON)
+        _mock_current_user(monkeypatch, surgeon)
+
+        response = await client.get(
+            f"/patients/{patient.id}/audit-log", headers=_auth_headers_for(surgeon)
+        )
+
+        assert response.status_code == 200
+        assert response.json() == []
+
+    @pytest.mark.asyncio
+    async def test_rejects_office_staff_with_403(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        patient = make_patient()
+        monkeypatch.setattr(Patient, "get", AsyncMock(return_value=patient))
+
+        office_staff = make_user(role=Role.OFFICE_STAFF)
+        _mock_current_user(monkeypatch, office_staff)
+
+        response = await client.get(
+            f"/patients/{patient.id}/audit-log", headers=_auth_headers_for(office_staff)
+        )
+
+        assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_returns_404_when_patient_not_found(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(Patient, "get", AsyncMock(return_value=None))
+
+        nurse = make_user(role=Role.NURSE)
+        _mock_current_user(monkeypatch, nurse)
+
+        response = await client.get(
+            "/patients/507f1f77bcf86cd799439011/audit-log", headers=_auth_headers_for(nurse)
+        )
+
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_returns_401_without_token(self, client: AsyncClient) -> None:
+        response = await client.get("/patients/507f1f77bcf86cd799439011/audit-log")
+
+        assert response.status_code == 401

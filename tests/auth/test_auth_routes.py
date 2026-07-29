@@ -15,7 +15,9 @@ from app.database import get_db_client
 from app.exceptions import AppException
 from app.main import app
 from app.models import User, document_models
+from app.models.audit_log import AuditAction
 from app.models.user import Role
+from app.routers import auth as auth_router
 
 
 class _FakeCollection:
@@ -100,6 +102,16 @@ def _mock_google_verification(monkeypatch: pytest.MonkeyPatch, google_user: Goog
     monkeypatch.setattr("app.routers.auth.verify_google_token", lambda id_token: google_user)
 
 
+def _mock_record_audit_entry(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """See tests/routers/test_patients.py's helper of the same name — same
+    reasoning: patching AuditLogEntry.insert directly can't assert on
+    entry content, so patch the function that builds the entry instead.
+    """
+    mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(auth_router, "record_audit_entry", mock)
+    return mock
+
+
 class TestGoogleLogin:
     @pytest.mark.asyncio
     async def test_creates_new_user_when_google_sub_id_not_found(
@@ -112,6 +124,7 @@ class TestGoogleLogin:
         monkeypatch.setattr(User, "find_one", AsyncMock(return_value=None))
         insert_mock = AsyncMock(return_value=None)
         monkeypatch.setattr(User, "insert", insert_mock)
+        audit_mock = _mock_record_audit_entry(monkeypatch)
 
         response = await client.post("/auth/google", json={"id_token": "fake-valid-token"})
 
@@ -123,6 +136,18 @@ class TestGoogleLogin:
 
         decoded = jwt.decode(body["access_token"], settings.JWT_SECRET_KEY, algorithms=["HS256"])
         assert decoded["role"] is None
+
+        audit_mock.assert_awaited_once()
+        audit_kwargs = audit_mock.call_args.kwargs
+        assert audit_kwargs["entity_type"] == "User"
+        assert audit_kwargs["action"] == AuditAction.CREATE
+        assert audit_kwargs["actor"].role == "unknown"
+        assert audit_kwargs["changes"]["before"] is None
+        assert audit_kwargs["changes"]["after"] == {
+            "email": "new.user@example.com",
+            "full_name": "New User",
+            "google_sub_id": "new-google-sub-456",
+        }
 
     @pytest.mark.asyncio
     async def test_finds_existing_user_and_does_not_create_a_new_one(
@@ -138,6 +163,7 @@ class TestGoogleLogin:
         monkeypatch.setattr(User, "find_one", AsyncMock(return_value=existing_user))
         insert_mock = AsyncMock(return_value=None)
         monkeypatch.setattr(User, "insert", insert_mock)
+        audit_mock = _mock_record_audit_entry(monkeypatch)
 
         response = await client.post("/auth/google", json={"id_token": "fake-valid-token"})
 
@@ -145,6 +171,8 @@ class TestGoogleLogin:
         body = response.json()
         assert body["role"] == "nurse"
         insert_mock.assert_not_awaited()
+        # Returning-user logins aren't a mutation — no audit entry expected.
+        audit_mock.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_returns_401_for_invalid_google_token(
@@ -174,6 +202,7 @@ class TestSelectRole:
         user = make_user(role=None)
         monkeypatch.setattr(User, "get", AsyncMock(return_value=user))
         monkeypatch.setattr(User, "save", AsyncMock(return_value=None))
+        audit_mock = _mock_record_audit_entry(monkeypatch)
 
         response = await client.post(
             "/auth/select-role",
@@ -187,6 +216,14 @@ class TestSelectRole:
 
         decoded = jwt.decode(body["access_token"], settings.JWT_SECRET_KEY, algorithms=["HS256"])
         assert decoded["role"] == "nurse"
+
+        audit_mock.assert_awaited_once()
+        audit_kwargs = audit_mock.call_args.kwargs
+        assert audit_kwargs["entity_type"] == "User"
+        assert audit_kwargs["entity_id"] == str(user.id)
+        assert audit_kwargs["action"] == AuditAction.UPDATE
+        assert audit_kwargs["actor"].role == "nurse"
+        assert audit_kwargs["changes"] == {"before": {"role": None}, "after": {"role": "nurse"}}
 
     @pytest.mark.asyncio
     async def test_rejects_when_role_already_set(

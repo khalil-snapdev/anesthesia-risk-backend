@@ -239,4 +239,60 @@ each to an image and visually confirmed clean, correct, non-blank output,
 and confirmed both AuditLogEntry writes landed before cleaning up all
 test data.
 
-Current: Phase 8 — audit logging completion pass
+Phase 8 (audit logging completion pass) is complete: this was a review
+pass, not a rewrite — went through every mutating endpoint in
+app/routers/patients.py and app/routers/auth.py and confirmed each writes
+a transactional, meaningful AuditLogEntry. update_intake,
+update_exam_finding, update_notes, and both PDF exports were already
+correct (real before/after diffs, real ActorSnapshot actors) and left
+untouched. Found and fixed four real gaps: (1) create_patient and the
+shared _create_patient_from_truform helper only captured full_name in the
+audit "after" diff — now also capture dob/sex/surgery_date/
+patient_identifier; (2) calculate_risk hardcoded "before": None and never
+included alerts in the diff at all, even though recalculating risk can
+change asa_class/scores/alerts together — now snapshots the patient's
+prior risk_assessment/recommendation_set/alerts before mutating, and
+includes alerts in both before and after; (3) acknowledge_alert hardcoded
+"before": {"acknowledged": False} instead of reading the alert's actual
+prior acknowledged/acknowledged_by/acknowledged_at state; (4)
+app/routers/auth.py had zero audit logging — select_role (one-time role
+assignment) and new-user creation inside login_with_google now write a
+transactional AuditLogEntry (entity_type="User") using the same
+run_in_transaction/record_audit_entry pattern as patients.py. Added
+GET /patients/{id}/audit-log (surgeon/nurse only, per the Roles section —
+office staff get no clinical/audit detail access) as the first way to
+actually read the audit trail back, ordered newest-first;
+app/schemas/audit.py::AuditLogEntryRead is the response schema. Also
+confirmed the established test pattern of mocking AuditLogEntry.insert
+can't assert on audit *content* (AsyncMock doesn't bind self, so the
+constructed entry is never visible to the mock) — added a
+record_audit_entry-patching helper to both test files so tests can assert
+directly on entity_type/action/actor/changes.
+
+## Phase 1-8 Summary (quick reference)
+
+- **Phase 1** — Data model layer: User, Patient, and AuditLogEntry
+  documents, plus all embedded clinical sub-documents.
+- **Phase 2** — Scoring engine: STOP-Bang, RCRI, ASA suggestion, METs,
+  overall-risk worst-of logic, alert generation, recommended tests — pure
+  functions, no DB, fully unit tested.
+- **Phase 3** — API routes: patient CRUD plus intake/exam-finding/
+  calculate-risk/alert-acknowledge/notes endpoints; established the
+  transactional audit-logging pattern every later phase reuses.
+- **Phase 4** — Deferred/merged: recommendations & alerts logic was
+  already delivered by Phases 2-3, no separate work needed.
+- **Phase 5** — Truform ingestion parser: tolerant field mapping,
+  missing-scoring-field flagging, manual and poll-based ingestion
+  endpoints.
+- **Phase 6** — Google auth + role-based access: Google ID token
+  verification, our own session JWTs, get_current_user/require_role
+  dependencies.
+- **Phase 7** — PDF exports: risk report and lab order generation via
+  reportlab, audited as AuditAction.PDF_GENERATED.
+- **Phase 8** — Audit logging completion pass: filled shallow/missing
+  audit diffs (patient creation, calculate-risk, alert acknowledgment),
+  added User-entity audit logging to auth.py, added the
+  GET /patients/{id}/audit-log read endpoint.
+
+Current: Backend feature-complete — next: deploy to Render, then connect
+Ember frontend to real API
