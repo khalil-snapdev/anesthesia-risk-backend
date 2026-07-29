@@ -6,5 +6,7 @@ httpx
 black
 ruff
 mypy
+types-reportlab
+pypdf
 pip-audit
 pre-commit

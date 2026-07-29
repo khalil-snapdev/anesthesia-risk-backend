@@ -218,4 +218,25 @@ app/config.py). Manually verified: hitting /auth/google via /docs with a
 fabricated token correctly returns 401, confirming Google verification
 actually runs.
 
-Current: Phase 7 — PDF exports (risk report + lab order)
+Phase 7 (PDF exports) is complete: app/services/pdf/risk_report.py and
+app/services/pdf/lab_order.py generate PDFs via reportlab (pure Python —
+no Cairo/Pango system dependency to complicate the Docker/Render
+deployment), covering the fields OMS Vision's manual-upload workflow and
+the lab-order spec need. GET /patients/{id}/export/risk-report is
+accessible to all 3 roles (office staff explicitly export PDFs per the
+Roles section); POST /patients/{id}/export/lab-order is nurse-only
+("Generate Lab Order"). Both write an AuditLogEntry (new
+AuditAction.PDF_GENERATED) inside the existing transaction pattern. Two
+real rendering bugs were caught and fixed before shipping: (1) HTML-
+escaping text meant for reportlab Table cells (as opposed to Paragraph,
+which actually interprets markup) made entities like `&amp;` show up
+literally instead of decoding; (2) the Unicode em-dash isn't in
+reportlab's default standard-14 fonts and rendered as a missing-glyph
+box — replaced with a plain ASCII hyphen throughout. Manually verified
+end-to-end against the real dev database: started uvicorn, downloaded
+both PDFs via authenticated requests through /docs's schema, rendered
+each to an image and visually confirmed clean, correct, non-blank output,
+and confirmed both AuditLogEntry writes landed before cleaning up all
+test data.
+
+Current: Phase 8 — audit logging completion pass

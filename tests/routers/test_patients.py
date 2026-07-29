@@ -1007,3 +1007,128 @@ class TestPollTruform:
         assert body["created"] == []
         assert len(body["skipped"]) == 1
         assert "name" in body["skipped"][0]["reason"]
+
+
+class TestExportRiskReport:
+    @pytest.mark.asyncio
+    async def test_returns_pdf_with_correct_headers(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        patient = make_patient()
+        monkeypatch.setattr(Patient, "get", AsyncMock(return_value=patient))
+        monkeypatch.setattr(AuditLogEntry, "insert", AsyncMock(return_value=None))
+
+        actor = make_user()
+        _mock_current_user(monkeypatch, actor)
+
+        response = await client.get(
+            f"/patients/{patient.id}/export/risk-report", headers=_auth_headers_for(actor)
+        )
+
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/pdf"
+        assert response.headers["content-disposition"] == (
+            f'attachment; filename="risk-report-{patient.patient_identifier}.pdf"'
+        )
+        assert response.content.startswith(b"%PDF")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("role", [Role.SURGEON, Role.NURSE, Role.OFFICE_STAFF])
+    async def test_accessible_to_all_three_roles(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch, role: Role
+    ) -> None:
+        patient = make_patient()
+        monkeypatch.setattr(Patient, "get", AsyncMock(return_value=patient))
+        monkeypatch.setattr(AuditLogEntry, "insert", AsyncMock(return_value=None))
+
+        actor = make_user(role=role)
+        _mock_current_user(monkeypatch, actor)
+
+        response = await client.get(
+            f"/patients/{patient.id}/export/risk-report", headers=_auth_headers_for(actor)
+        )
+
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_returns_401_without_token(self, client: AsyncClient) -> None:
+        response = await client.get("/patients/507f1f77bcf86cd799439011/export/risk-report")
+
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_returns_404_when_patient_not_found(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(Patient, "get", AsyncMock(return_value=None))
+
+        actor = make_user()
+        _mock_current_user(monkeypatch, actor)
+
+        response = await client.get(
+            "/patients/507f1f77bcf86cd799439011/export/risk-report",
+            headers=_auth_headers_for(actor),
+        )
+
+        assert response.status_code == 404
+
+
+class TestExportLabOrder:
+    @pytest.mark.asyncio
+    async def test_returns_pdf_with_correct_headers(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        patient = make_patient()
+        monkeypatch.setattr(Patient, "get", AsyncMock(return_value=patient))
+        monkeypatch.setattr(AuditLogEntry, "insert", AsyncMock(return_value=None))
+
+        nurse = make_user(role=Role.NURSE)
+        _mock_current_user(monkeypatch, nurse)
+
+        response = await client.post(
+            f"/patients/{patient.id}/export/lab-order", headers=_auth_headers_for(nurse)
+        )
+
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/pdf"
+        assert response.headers["content-disposition"] == (
+            f'attachment; filename="lab-order-{patient.patient_identifier}.pdf"'
+        )
+        assert response.content.startswith(b"%PDF")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("role", [Role.SURGEON, Role.OFFICE_STAFF])
+    async def test_rejects_non_nurse_role_with_403(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch, role: Role
+    ) -> None:
+        patient = make_patient()
+        non_nurse = make_user(role=role)
+        _mock_current_user(monkeypatch, non_nurse)
+
+        response = await client.post(
+            f"/patients/{patient.id}/export/lab-order", headers=_auth_headers_for(non_nurse)
+        )
+
+        assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_returns_401_without_token(self, client: AsyncClient) -> None:
+        response = await client.post("/patients/507f1f77bcf86cd799439011/export/lab-order")
+
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_returns_404_when_patient_not_found(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(Patient, "get", AsyncMock(return_value=None))
+
+        nurse = make_user(role=Role.NURSE)
+        _mock_current_user(monkeypatch, nurse)
+
+        response = await client.post(
+            "/patients/507f1f77bcf86cd799439011/export/lab-order",
+            headers=_auth_headers_for(nurse),
+        )
+
+        assert response.status_code == 404

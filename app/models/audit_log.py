@@ -13,6 +13,7 @@ class AuditAction(StrEnum):
     CREATE = "create"
     UPDATE = "update"
     DELETE = "delete"
+    PDF_GENERATED = "pdf_generated"
 
 
 class AuditLogEntry(Document):

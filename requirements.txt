@@ -6,3 +6,4 @@ beanie
 pymongo>=4.15,<5
 google-auth
 pyjwt
+reportlab

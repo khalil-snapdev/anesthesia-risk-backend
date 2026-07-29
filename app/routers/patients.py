@@ -2,6 +2,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, status
+from fastapi.responses import Response
 from pydantic import ValidationError
 from pymongo import AsyncMongoClient
 from pymongo.asynchronous.client_session import AsyncClientSession
@@ -41,6 +42,8 @@ from app.schemas.truform import (
 )
 from app.services.alerts import generate_alerts, merge_alerts
 from app.services.audit import record_audit_entry, run_in_transaction
+from app.services.pdf.lab_order import generate_lab_order_pdf
+from app.services.pdf.risk_report import generate_risk_report_pdf
 from app.services.recommendations import generate_recommended_tests
 from app.services.scoring.asa import asa_class_to_level, suggest_asa_class
 from app.services.scoring.mets import classify_mets
@@ -520,3 +523,64 @@ async def update_notes(
 
     updated = await run_in_transaction(client, _txn)
     return PatientRead.from_patient(updated)
+
+
+def _pdf_response(pdf_bytes: bytes, filename: str) -> Response:
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{patient_id}/export/risk-report")
+async def export_risk_report(
+    patient_id: str,
+    client: AsyncMongoClient[Any] = Depends(get_db_client),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    # Accessible to all 3 roles — per CLAUDE.md's Roles section, exporting
+    # PDFs is explicitly one of office staff's allowed actions, alongside
+    # surgeon/nurse.
+    patient = await _get_patient_or_404(patient_id)
+    pdf_bytes = generate_risk_report_pdf(patient)
+    actor = _actor_snapshot_for_user(current_user)
+
+    async def _txn(session: AsyncClientSession) -> None:
+        await record_audit_entry(
+            session,
+            entity_type="Patient",
+            entity_id=str(patient.id),
+            action=AuditAction.PDF_GENERATED,
+            actor=actor,
+            changes={"before": None, "after": {"document": "risk_report"}},
+        )
+
+    await run_in_transaction(client, _txn)
+    return _pdf_response(pdf_bytes, f"risk-report-{patient.patient_identifier}.pdf")
+
+
+@router.post("/{patient_id}/export/lab-order")
+async def export_lab_order(
+    patient_id: str,
+    client: AsyncMongoClient[Any] = Depends(get_db_client),
+    current_user: User = Depends(require_role("nurse")),
+) -> Response:
+    # Nurse-only per CLAUDE.md's Roles section — "Generate Lab Order" is a
+    # nurse action.
+    patient = await _get_patient_or_404(patient_id)
+    ordering_provider = _actor_snapshot_for_user(current_user)
+    pdf_bytes = generate_lab_order_pdf(patient, ordering_provider)
+
+    async def _txn(session: AsyncClientSession) -> None:
+        await record_audit_entry(
+            session,
+            entity_type="Patient",
+            entity_id=str(patient.id),
+            action=AuditAction.PDF_GENERATED,
+            actor=ordering_provider,
+            changes={"before": None, "after": {"document": "lab_order"}},
+        )
+
+    await run_in_transaction(client, _txn)
+    return _pdf_response(pdf_bytes, f"lab-order-{patient.patient_identifier}.pdf")
