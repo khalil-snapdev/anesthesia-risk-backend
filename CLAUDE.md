@@ -199,4 +199,23 @@ cover clinical/demographic data only — a scheduled surgery date and the
 staff member doing the import aren't things Truform sends and aren't
 guessed at.
 
-Current: Phase 6 — Google auth + role-based access
+Phase 6 (Google auth + role-based access) is complete: app/auth/
+google_oauth.py verifies Google Sign-In ID tokens against Google's public
+keys (google-auth library, never trusts unverified claims);
+app/auth/jwt_handler.py issues/verifies our own short-lived session JWTs
+(pyjwt) carrying user_id + role; app/auth/dependencies.py provides
+get_current_user (401 if missing/invalid/inactive) and the require_role
+factory (403 if role doesn't match) for future route protection.
+app/routers/auth.py: POST /auth/google (find-or-create User by
+google_sub_id, issue JWT), POST /auth/select-role (one-time, 409 if
+already set), GET /auth/me. Applied as a working example to two Phase 3
+routes: PATCH /patients/{id}/exam-finding now requires nurse role;
+GET /patients requires any authenticated user (all 3 roles) — response
+filtering by role is a schema concern (PatientListItem) already handled
+in Phase 3, not an auth concern. JWT_SECRET_KEY auto-generates per
+process for local dev — production must set a real, stable value (see
+app/config.py). Manually verified: hitting /auth/google via /docs with a
+fabricated token correctly returns 401, confirming Google verification
+actually runs.
+
+Current: Phase 7 — PDF exports (risk report + lab order)

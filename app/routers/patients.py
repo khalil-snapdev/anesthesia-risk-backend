@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from pymongo import AsyncMongoClient
 from pymongo.asynchronous.client_session import AsyncClientSession
 
+from app.auth.dependencies import get_current_user, require_role
 from app.database import get_db_client
 from app.exceptions import AppException
 from app.models.audit_log import AuditAction
@@ -191,7 +192,12 @@ async def create_patient(
 
 
 @router.get("", response_model=list[PatientListItem])
-async def list_patients() -> list[PatientListItem]:
+async def list_patients(
+    current_user: User = Depends(get_current_user),
+) -> list[PatientListItem]:
+    # Accessible to all 3 roles — office staff seeing fewer fields than
+    # surgeon/nurse is a response-shape concern PatientListItem already
+    # handles (Phase 3), not something this auth dependency needs to gate.
     patients = await Patient.find(Patient.is_deleted == False).to_list()
     return [PatientListItem.from_patient(patient) for patient in patients]
 
@@ -248,7 +254,10 @@ async def update_exam_finding(
     patient_id: str,
     payload: ExamFindingUpdate,
     client: AsyncMongoClient[Any] = Depends(get_db_client),
+    current_user: User = Depends(require_role("nurse")),
 ) -> PatientRead:
+    # Nurse-only per CLAUDE.md's Roles section — surgeon is view-only on
+    # exam findings.
     patient = await _get_patient_or_404(patient_id)
     before = patient.exam_finding.model_dump(mode="json") if patient.exam_finding else None
 

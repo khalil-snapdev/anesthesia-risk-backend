@@ -9,6 +9,7 @@ from beanie import Link, init_beanie
 from bson import DBRef, ObjectId
 from httpx import ASGITransport, AsyncClient
 
+from app.auth.jwt_handler import create_access_token
 from app.database import get_db_client
 from app.main import app
 from app.models import AuditLogEntry, Patient, User, document_models
@@ -133,6 +134,16 @@ def _patch_writes_as_no_ops(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(AuditLogEntry, "insert", AsyncMock(return_value=None))
 
 
+def _auth_headers_for(user: User) -> dict[str, str]:
+    token = create_access_token(user_id=str(user.id), role=user.role.value if user.role else None)
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _mock_current_user(monkeypatch: pytest.MonkeyPatch, user: User) -> None:
+    """Mock the DB lookup get_current_user performs while decoding a token."""
+    monkeypatch.setattr(User, "get", AsyncMock(return_value=user))
+
+
 class TestGetPatient:
     @pytest.mark.asyncio
     async def test_returns_full_patient_detail(
@@ -219,7 +230,10 @@ class TestListPatients:
         find_result.to_list = AsyncMock(return_value=[patient_with_risk, patient_without_risk])
         monkeypatch.setattr(Patient, "find", MagicMock(return_value=find_result))
 
-        response = await client.get("/patients")
+        actor = make_user()
+        _mock_current_user(monkeypatch, actor)
+
+        response = await client.get("/patients", headers=_auth_headers_for(actor))
 
         assert response.status_code == 200
         body = response.json()
@@ -250,10 +264,35 @@ class TestListPatients:
         find_result.to_list = AsyncMock(return_value=[])
         monkeypatch.setattr(Patient, "find", MagicMock(return_value=find_result))
 
-        response = await client.get("/patients")
+        actor = make_user()
+        _mock_current_user(monkeypatch, actor)
+
+        response = await client.get("/patients", headers=_auth_headers_for(actor))
 
         assert response.status_code == 200
         assert response.json() == []
+
+    @pytest.mark.asyncio
+    async def test_returns_401_without_token(self, client: AsyncClient) -> None:
+        response = await client.get("/patients")
+
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("role", [Role.SURGEON, Role.NURSE, Role.OFFICE_STAFF])
+    async def test_accessible_to_all_three_roles(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch, role: Role
+    ) -> None:
+        find_result = MagicMock()
+        find_result.to_list = AsyncMock(return_value=[])
+        monkeypatch.setattr(Patient, "find", MagicMock(return_value=find_result))
+
+        actor = make_user(role=role)
+        _mock_current_user(monkeypatch, actor)
+
+        response = await client.get("/patients", headers=_auth_headers_for(actor))
+
+        assert response.status_code == 200
 
 
 class TestCreatePatient:
@@ -416,6 +455,9 @@ class TestUpdateExamFinding:
         monkeypatch.setattr(Patient, "get", AsyncMock(return_value=patient))
         _patch_writes_as_no_ops(monkeypatch)
 
+        nurse = make_user(role=Role.NURSE)
+        _mock_current_user(monkeypatch, nurse)
+
         response = await client.patch(
             f"/patients/{patient.id}/exam-finding",
             json={
@@ -423,6 +465,7 @@ class TestUpdateExamFinding:
                 "airway_notes": "Limited neck extension",
                 "entered_by": {"user_id": "u1", "full_name": "Nora Nurse", "role": "nurse"},
             },
+            headers=_auth_headers_for(nurse),
         )
 
         assert response.status_code == 200
@@ -431,13 +474,19 @@ class TestUpdateExamFinding:
         assert body["exam_finding"]["entered_by"]["full_name"] == "Nora Nurse"
 
     @pytest.mark.asyncio
-    async def test_returns_422_for_out_of_range_mallampati(self, client: AsyncClient) -> None:
+    async def test_returns_422_for_out_of_range_mallampati(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        nurse = make_user(role=Role.NURSE)
+        _mock_current_user(monkeypatch, nurse)
+
         response = await client.patch(
             "/patients/507f1f77bcf86cd799439011/exam-finding",
             json={
                 "mallampati_class": 5,
                 "entered_by": {"user_id": "u1", "full_name": "Nora Nurse", "role": "nurse"},
             },
+            headers=_auth_headers_for(nurse),
         )
 
         assert response.status_code == 422
@@ -448,6 +497,22 @@ class TestUpdateExamFinding:
     ) -> None:
         monkeypatch.setattr(Patient, "get", AsyncMock(return_value=None))
 
+        nurse = make_user(role=Role.NURSE)
+        _mock_current_user(monkeypatch, nurse)
+
+        response = await client.patch(
+            "/patients/507f1f77bcf86cd799439011/exam-finding",
+            json={
+                "mallampati_class": 2,
+                "entered_by": {"user_id": "u1", "full_name": "Nora Nurse", "role": "nurse"},
+            },
+            headers=_auth_headers_for(nurse),
+        )
+
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_returns_401_without_token(self, client: AsyncClient) -> None:
         response = await client.patch(
             "/patients/507f1f77bcf86cd799439011/exam-finding",
             json={
@@ -456,7 +521,30 @@ class TestUpdateExamFinding:
             },
         )
 
-        assert response.status_code == 404
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("role", [Role.SURGEON, Role.OFFICE_STAFF])
+    async def test_rejects_non_nurse_role_with_403(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch, role: Role
+    ) -> None:
+        non_nurse = make_user(role=role)
+        _mock_current_user(monkeypatch, non_nurse)
+
+        response = await client.patch(
+            "/patients/507f1f77bcf86cd799439011/exam-finding",
+            json={
+                "mallampati_class": 2,
+                "entered_by": {"user_id": "u1", "full_name": "Nora Nurse", "role": "nurse"},
+            },
+            headers=_auth_headers_for(non_nurse),
+        )
+
+        assert response.status_code == 403
+        assert response.json() == {
+            "error": "forbidden",
+            "message": "Insufficient permissions for this action",
+        }
 
 
 class TestCalculateRisk:

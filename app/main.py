@@ -9,12 +9,17 @@ from pymongo import AsyncMongoClient
 from app.database import close_db, get_db_client, init_db
 from app.exceptions import AppException
 from app.logging_config import configure_logging, get_logger
-from app.routers import patients
+from app.routers import auth, patients
 
 configure_logging()
 logger = get_logger(__name__)
 
-_ERROR_NAMES_BY_STATUS = {404: "not_found"}
+_ERROR_NAMES_BY_STATUS = {
+    401: "unauthorized",
+    403: "forbidden",
+    404: "not_found",
+    409: "conflict",
+}
 
 
 @asynccontextmanager
@@ -26,6 +31,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Anesthesia Risk Score 2.0", lifespan=lifespan)
 
+app.include_router(auth.router)
 app.include_router(patients.router)
 
 

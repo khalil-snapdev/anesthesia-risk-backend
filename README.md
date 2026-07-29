@@ -66,8 +66,9 @@ docker run -p 8000:8000 --env-file .env anesthesia-risk-backend
 ## Project Status
 
 Phase 1 (data model layer), Phase 2 (scoring engine), Phase 3 (API
-routes), and Phase 5 (Truform ingestion parser) are complete. Phase 4
-(recommendations & alerts) was already covered by Phase 2's services and
-Phase 3's routes, so it's deferred/merged. Currently on **Phase 6 —
-Google auth + role-based access**. This project is being built in small,
-reviewed phases — see `CLAUDE.md` for the full roadmap and current phase.
+routes), Phase 5 (Truform ingestion parser), and Phase 6 (Google auth +
+role-based access) are complete. Phase 4 (recommendations & alerts) was
+already covered by Phase 2's services and Phase 3's routes, so it's
+deferred/merged. Currently on **Phase 7 — PDF exports (risk report + lab
+order)**. This project is being built in small, reviewed phases — see
+`CLAUDE.md` for the full roadmap and current phase.
