@@ -1,0 +1,32 @@
+{
+  "patient_self_first_name": "John",
+  "patient_self_last_name": "Doe",
+  "patient_self_age": "58",
+  "patient_self_date_of_birth": "1968-03-15",
+  "patient_self_sex_description": "Male",
+
+  "health_history_medical_snoring": "yes",
+  "health_history_medical_high_blood_pressure": "yes",
+  "health_history_current_weight": "180",
+  "health_history_current_height": "70",
+
+  "health_history_medication_blood_thinners": "yes",
+  "medication1_name": "Lisinopril",
+  "medication2_name": "Warfarin",
+
+  "health_history_medical_diabetes": "no",
+  "health_history_medical_heart_attack": "no",
+  "health_history_medical_angina": "no",
+  "health_history_medical_stroke": "no",
+  "health_history_medical_kidney_trouble": "no",
+  "health_history_pregnancy": "no",
+
+  "health_history_allergies_penicillin": "yes",
+  "health_history_allergies_sulfa_drugs": "no",
+  "health_history_allergies_latex": "no",
+  "health_history_allergies_known_allergies": "Penicillin - causes rash",
+  "health_history_allergies1_name": "Penicillin",
+
+  "insurance_provider_name": "Delta Dental",
+  "patient_self_middle_name": "Michael"
+}

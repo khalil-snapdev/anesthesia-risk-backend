@@ -7,10 +7,14 @@ from fastapi.responses import JSONResponse
 from pymongo import AsyncMongoClient
 
 from app.database import close_db, get_db_client, init_db
+from app.exceptions import AppException
 from app.logging_config import configure_logging, get_logger
+from app.routers import patients
 
 configure_logging()
 logger = get_logger(__name__)
+
+_ERROR_NAMES_BY_STATUS = {404: "not_found"}
 
 
 @asynccontextmanager
@@ -21,6 +25,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Anesthesia Risk Score 2.0", lifespan=lifespan)
+
+app.include_router(patients.router)
+
+
+@app.exception_handler(AppException)
+async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
+    logger.warning("Handled application exception: %s", exc.message)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": _ERROR_NAMES_BY_STATUS.get(exc.status_code, "application_error"),
+            "message": exc.message,
+        },
+    )
 
 
 @app.exception_handler(Exception)

@@ -87,3 +87,28 @@ def generate_alerts(
         )
 
     return alerts
+
+
+def merge_alerts(existing: list[Alert], newly_generated: list[Alert]) -> list[Alert]:
+    """Merge freshly generated alerts with a patient's existing ones.
+
+    Acknowledgment is an audit-trail record of a real action someone took —
+    recalculating risk must not silently discard it. Alerts are matched by
+    alert_type (not exact message, since wording can shift between
+    calculations for the same underlying condition). For each newly
+    generated alert: if an alert of the same type already exists and is
+    acknowledged, keep its acknowledged/acknowledged_by/acknowledged_at but
+    refresh the message text; otherwise use the new alert as-is. Alert
+    types no longer triggered are dropped.
+    """
+    existing_by_type = {alert.alert_type: alert for alert in existing}
+    merged: list[Alert] = []
+
+    for new_alert in newly_generated:
+        prior = existing_by_type.get(new_alert.alert_type)
+        if prior is not None and prior.acknowledged:
+            merged.append(prior.model_copy(update={"message": new_alert.message}))
+        else:
+            merged.append(new_alert)
+
+    return merged

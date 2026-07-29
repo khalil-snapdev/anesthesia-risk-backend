@@ -1,5 +1,7 @@
-from app.models.embedded import AlertSeverity, AlertType, RiskLevel
-from app.services.alerts import generate_alerts
+from datetime import UTC, datetime
+
+from app.models.embedded import ActorSnapshot, Alert, AlertSeverity, AlertType, RiskLevel
+from app.services.alerts import generate_alerts, merge_alerts
 from app.services.recommendations import generate_recommended_tests
 
 
@@ -264,6 +266,94 @@ class TestGenerateAlertsCombinations:
             AlertType.AIRWAY_CONCERN,
         }
         assert len(alerts) == 4
+
+
+class TestMergeAlerts:
+    def test_no_existing_alerts_returns_new_alerts_as_is(self) -> None:
+        new_alert = Alert(
+            alert_type=AlertType.OSA,
+            message="STOP-Bang score 6",
+            severity=AlertSeverity.CRITICAL,
+        )
+        merged = merge_alerts([], [new_alert])
+        assert merged == [new_alert]
+
+    def test_alert_type_no_longer_triggered_is_dropped(self) -> None:
+        stale_alert = Alert(
+            alert_type=AlertType.OSA,
+            message="STOP-Bang score 6",
+            severity=AlertSeverity.CRITICAL,
+        )
+        merged = merge_alerts([stale_alert], [])
+        assert merged == []
+
+    def test_unacknowledged_existing_alert_is_replaced_by_new_one(self) -> None:
+        old_alert = Alert(
+            alert_type=AlertType.OSA,
+            message="STOP-Bang score 5",
+            severity=AlertSeverity.CRITICAL,
+        )
+        new_alert = Alert(
+            alert_type=AlertType.OSA,
+            message="STOP-Bang score 7",
+            severity=AlertSeverity.CRITICAL,
+        )
+        merged = merge_alerts([old_alert], [new_alert])
+        assert len(merged) == 1
+        assert merged[0].id == new_alert.id
+        assert merged[0].message == "STOP-Bang score 7"
+
+    def test_acknowledged_alert_of_same_type_preserves_acknowledgment_and_updates_message(
+        self,
+    ) -> None:
+        acknowledged_by = ActorSnapshot(user_id="user-1", full_name="Nora Nurse", role="nurse")
+        acknowledged_at = datetime.now(UTC)
+        old_alert = Alert(
+            alert_type=AlertType.OSA,
+            message="STOP-Bang score 6 — high risk of OSA",
+            severity=AlertSeverity.CRITICAL,
+            acknowledged=True,
+            acknowledged_by=acknowledged_by,
+            acknowledged_at=acknowledged_at,
+        )
+        new_alert = Alert(
+            alert_type=AlertType.OSA,
+            message="STOP-Bang score 7 — high risk of OSA",
+            severity=AlertSeverity.CRITICAL,
+        )
+
+        merged = merge_alerts([old_alert], [new_alert])
+
+        assert len(merged) == 1
+        result = merged[0]
+        assert result.id == old_alert.id
+        assert result.acknowledged is True
+        assert result.acknowledged_by == acknowledged_by
+        assert result.acknowledged_at == acknowledged_at
+        assert result.message == "STOP-Bang score 7 — high risk of OSA"
+
+    def test_new_alert_type_is_added_fresh(self) -> None:
+        existing_alert = Alert(
+            alert_type=AlertType.OSA,
+            message="STOP-Bang score 6",
+            severity=AlertSeverity.CRITICAL,
+            acknowledged=True,
+            acknowledged_by=ActorSnapshot(user_id="user-1", full_name="Nora Nurse", role="nurse"),
+            acknowledged_at=datetime.now(UTC),
+        )
+        new_airway_alert = Alert(
+            alert_type=AlertType.AIRWAY_CONCERN,
+            message="Mallampati class 4",
+            severity=AlertSeverity.CRITICAL,
+        )
+
+        merged = merge_alerts([existing_alert], [existing_alert, new_airway_alert])
+
+        assert len(merged) == 2
+        merged_types = {a.alert_type for a in merged}
+        assert merged_types == {AlertType.OSA, AlertType.AIRWAY_CONCERN}
+        osa_alert = next(a for a in merged if a.alert_type == AlertType.OSA)
+        assert osa_alert.acknowledged is True
 
 
 class TestGenerateRecommendedTests:

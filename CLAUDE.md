@@ -42,7 +42,9 @@ id, email, full_name, role (enum: surgeon/nurse/office_staff), google_sub_id,
 created_at
 
 **Patient** (top-level document):
-id, full_name, dob, sex, surgery_date, created_at, created_by (User ref)
+id, full_name, dob, sex, surgery_date, notes (str, nullable — clinician
+notes; surgeon/nurse can write, per Roles section), created_at, created_by
+(User ref)
 
 **intake_record** (embedded in Patient):
 raw_truform_payload (dict/JSON), medical_history (dict), medications (dict), 
@@ -116,13 +118,20 @@ regardless of individual scores.
 
 ## External Systems
 - **Truform**: inbound only — real-world patient intake e-forms system 
-  (PBHS). Sends JSON via API. Known integration fields include: patient 
+  (PBHS). API defaults to JSON (per PBHS's own docs: "you can choose JSON 
+  (default) or XML"; our PRD also specifies JSON) — a submission is a 
+  property containing a list of key/value pairs. Integration is 
+  POLL-based: our backend periodically asks Truform "any new 
+  submissions?" — Truform never calls us, we call them. Forms are 
+  dynamic — a field the patient left blank is omitted entirely, never 
+  assume a fixed schema. Known integration fields include: patient 
   demographics, insurance, health history items, medications, allergies, 
   emergency contacts, accident information. Fields specific to our scoring 
-  (BMI, neck circumference, STOP-Bang symptom questions) are NOT guaranteed 
-  to be present — build the parser to gracefully handle missing fields and 
-  allow manual entry as fallback. Don't hardcode assumptions about their 
-  exact schema until real API docs/sample payload are available.
+  (BMI, neck circumference, STOP-Bang symptom questions) are NOT 
+  guaranteed to be present — build the parser to gracefully handle 
+  missing fields and allow manual entry as fallback. Real PBHS field 
+  names confirmed for scoring-relevant fields — see 
+  app/services/truform_parser.py.
 - **OMS Vision**: outbound only — real practice management/EHR software 
   (Henry Schein One). No public API exists for direct integration. This 
   backend's only job is to generate clean, well-formatted PDFs (risk 
@@ -162,4 +171,32 @@ STOP-Bang, RCRI, ASA suggestion, METs classification, overall-risk
 worst-of logic, alert generation, and recommended-test generation, all in
 app/services/, with no DB calls or routes — fully unit tested.
 
-Current: Phase 3 — API routes
+Phase 3 (API routes) is complete: app/schemas/patient.py (PatientCreate,
+PatientRead, PatientListItem, and the per-endpoint update schemas) and
+app/routers/patients.py wire the Phase 2 service layer to real HTTP
+endpoints (create/list/get patient, update intake/exam-finding, calculate
+risk, acknowledge alert, update notes). Every mutating endpoint writes its
+AuditLogEntry inside the same MongoDB transaction as the Patient update,
+per the Data Modeling Approach section above. Added Patient.notes (was
+missing from the Phase 1 model, per the PRD's Roles section). Verified via
+/docs that all endpoints and schemas render correctly.
+
+Phase 4 (recommendations & alerts) is deferred/merged: that rules-engine
+logic was already built as pure services in Phase 2, and Phase 3 wired it
+into routes — there is no separate Phase 4 work remaining.
+
+Phase 5 (Truform ingestion parser) is complete: app/services/truform_parser.py
+maps real PBHS XML field names (researched, not generic guesses) into
+ParsedIntakeData, always flagging permanently-missing scoring fields
+(tired_during_day, observed_apnea, neck_circumference_cm, mallampati_class)
+and any unrecognized fields in the payload; never raises on malformed
+input. app/services/truform_client.py's fetch_pending_submissions() is a
+stub pending real Truform API credentials. POST /patients/from-truform
+(manual/test payload submission) and POST /patients/poll-truform (calls
+the stub, currently always creates zero patients) both require
+surgery_date and created_by as explicit inputs, since Truform's fields
+cover clinical/demographic data only — a scheduled surgery date and the
+staff member doing the import aren't things Truform sends and aren't
+guessed at.
+
+Current: Phase 6 — Google auth + role-based access

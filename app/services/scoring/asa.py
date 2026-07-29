@@ -7,6 +7,8 @@ heuristic, not an authoritative clinical scoring system — a clinician
 always makes the final call.
 """
 
+from app.models.embedded import RiskLevel
+
 # Ordered most-severe first: the first matching tier wins.
 _CLASS_IV_KEYWORDS = (
     "unstable angina",
@@ -54,3 +56,14 @@ def suggest_asa_class(comorbidities: list[str]) -> tuple[str, bool]:
     if normalized:
         return "II", True
     return "I", True
+
+
+def asa_class_to_level(asa_class: str) -> RiskLevel:
+    """Map an ASA class letter to a risk level, per CLAUDE.md's Scoring
+    Logic section: I-II = Low, III = Moderate, IV-VI = High.
+    """
+    if asa_class in ("I", "II"):
+        return RiskLevel.LOW
+    if asa_class == "III":
+        return RiskLevel.MODERATE
+    return RiskLevel.HIGH

@@ -1,7 +1,7 @@
 import pytest
 
 from app.models.embedded import MetsCapacity, RiskLevel
-from app.services.scoring.asa import suggest_asa_class
+from app.services.scoring.asa import asa_class_to_level, suggest_asa_class
 from app.services.scoring.mets import classify_mets
 from app.services.scoring.overall_risk import calculate_overall_risk
 from app.services.scoring.rcri import calculate_rcri
@@ -278,6 +278,21 @@ class TestSuggestAsaClass:
         for comorbidities in ([], ["hypertension"], ["unstable angina"], ["copd"]):
             _, asa_suggested = suggest_asa_class(comorbidities)
             assert asa_suggested is True
+
+
+class TestAsaClassToLevel:
+    def test_class_one_is_low(self) -> None:
+        assert asa_class_to_level("I") == RiskLevel.LOW
+
+    def test_class_two_is_low(self) -> None:
+        assert asa_class_to_level("II") == RiskLevel.LOW
+
+    def test_class_three_is_moderate(self) -> None:
+        assert asa_class_to_level("III") == RiskLevel.MODERATE
+
+    @pytest.mark.parametrize("asa_class", ["IV", "V", "VI"])
+    def test_classes_four_through_six_are_high(self, asa_class: str) -> None:
+        assert asa_class_to_level(asa_class) == RiskLevel.HIGH
 
 
 class TestClassifyMets:
