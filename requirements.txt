@@ -7,3 +7,4 @@ pymongo>=4.15,<5
 google-auth
 pyjwt
 reportlab
+setuptools>=83.0.0  # PYSEC-2026-3447: pin patched version over CI's/Render's preinstalled vulnerable copy
