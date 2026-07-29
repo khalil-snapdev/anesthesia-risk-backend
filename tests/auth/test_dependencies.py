@@ -41,6 +41,9 @@ class _FakeDatabase:
     async def command(self, cmd: dict[str, Any]) -> dict[str, Any]:
         return {"version": "7.0.0"}
 
+    async def list_collection_names(self, **kwargs: Any) -> list[str]:
+        return []
+
 
 @pytest.fixture(scope="module", autouse=True)
 def _init_models() -> None:
