@@ -65,6 +65,6 @@ docker run -p 8000:8000 --env-file .env anesthesia-risk-backend
 
 ## Project Status
 
-Currently on **Step 1.4 — clinical models**. This project is
+Currently on **Step 1.5 — supporting models (RecommendationSet, Alert, AuditLogEntry)**. This project is
 being built in small, reviewed phases — see `CLAUDE.md` for the full
 roadmap and current phase.

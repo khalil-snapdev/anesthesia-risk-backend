@@ -7,6 +7,7 @@ from beanie import Document, Link, Save, before_event
 from pydantic import Field, field_validator
 from pymongo import IndexModel
 
+from app.models.embedded import ExamFinding, IntakeRecord, RiskAssessment
 from app.models.user import User
 
 
@@ -27,10 +28,11 @@ class Patient(Document):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     created_by: Link[User]
 
-    # Embedded clinical sub-documents — added in Step 1.4/1.5:
-    # intake_record: IntakeRecord | None = None
-    # exam_finding: ExamFinding | None = None
-    # risk_assessment: RiskAssessment | None = None
+    intake_record: IntakeRecord | None = None
+    exam_finding: ExamFinding | None = None
+    risk_assessment: RiskAssessment | None = None
+
+    # Added in Step 1.5:
     # recommendation_set: RecommendationSet | None = None
     # alerts: list[Alert] = []
 
