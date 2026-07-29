@@ -21,9 +21,19 @@ class _FakeCollection:
         return [f"idx_{i}" for i in range(len(indexes))]
 
 
+class _FakeClient:
+    """Stands in for AsyncMongoClient's driver-metadata reporting (PyMongo
+    >=4.14). append_metadata=None makes beanie's callable() check skip it,
+    matching pre-4.14 behavior.
+    """
+
+    append_metadata = None
+
+
 class _FakeDatabase:
     def __init__(self) -> None:
         self._collections: dict[str, _FakeCollection] = {}
+        self.client = _FakeClient()
 
     def __getitem__(self, name: str) -> _FakeCollection:
         return self._collections.setdefault(name, _FakeCollection())
