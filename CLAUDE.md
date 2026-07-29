@@ -151,4 +151,4 @@ go-ahead before starting the next phase. Each phase should end with a
 passing test suite and a clean git status ready to commit.
 
 ## Current Phase
-Step 1.5 — supporting models (RecommendationSet, Alert, AuditLogEntry)
+Step 1.6 — final Patient model review + basic CRUD smoke test

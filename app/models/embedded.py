@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -9,6 +10,18 @@ class ActorSnapshot(BaseModel):
     user_id: str
     full_name: str
     role: str
+
+
+class AlertType(StrEnum):
+    ANTICOAGULANT = "anticoagulant"
+    SEVERE_ALLERGY = "severe_allergy"
+    OSA = "osa"
+    AIRWAY_CONCERN = "airway_concern"
+
+
+class AlertSeverity(StrEnum):
+    CRITICAL = "critical"
+    WARNING = "warning"
 
 
 class VerificationStatus(StrEnum):
@@ -84,3 +97,19 @@ class RiskAssessment(BaseModel):
         if value is not None and not 0 <= value <= 6:
             raise ValueError("rcri_score must be between 0 and 6")
         return value
+
+
+class RecommendationSet(BaseModel):
+    recommended_tests: list[str] = Field(default_factory=list)
+    generated_at: datetime | None = None
+
+
+class Alert(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:8])
+    alert_type: AlertType
+    message: str
+    severity: AlertSeverity
+    acknowledged: bool = False
+    acknowledged_by: ActorSnapshot | None = None
+    acknowledged_at: datetime | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

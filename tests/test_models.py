@@ -7,13 +7,18 @@ from beanie import init_beanie
 from beanie.odm.actions import ActionDirections, ActionRegistry, EventTypes
 from pydantic import ValidationError
 
-from app.models import Patient, User
+from app.models import AuditLogEntry, Patient, User, document_models
+from app.models.audit_log import AuditAction
 from app.models.embedded import (
     ActorSnapshot,
+    Alert,
+    AlertSeverity,
+    AlertType,
     ExamFinding,
     IntakeRecord,
     IntakeSource,
     MetsCapacity,
+    RecommendationSet,
     RiskAssessment,
     RiskLevel,
     VerificationStatus,
@@ -53,7 +58,7 @@ def _init_models() -> None:
     asyncio.run(
         init_beanie(
             database=_FakeDatabase(),  # type: ignore[arg-type]
-            document_models=[User, Patient],
+            document_models=document_models,
         )
     )
 
@@ -149,6 +154,8 @@ class TestPatient:
         assert patient.intake_record is None
         assert patient.exam_finding is None
         assert patient.risk_assessment is None
+        assert patient.recommendation_set is None
+        assert patient.alerts == []
 
     def test_clinical_fields_can_be_populated(self) -> None:
         actor = make_actor_snapshot()
@@ -179,6 +186,29 @@ class TestPatient:
         assert patient.exam_finding.mallampati_class == 2
         assert patient.risk_assessment is not None
         assert patient.risk_assessment.stop_bang_level == RiskLevel.HIGH
+
+    def test_alerts_and_recommendation_set_can_be_populated(self) -> None:
+        alerts = [
+            Alert(
+                alert_type=AlertType.OSA,
+                message="STOP-Bang score 5",
+                severity=AlertSeverity.CRITICAL,
+            ),
+            Alert(
+                alert_type=AlertType.ANTICOAGULANT,
+                message="Patient on Warfarin",
+                severity=AlertSeverity.CRITICAL,
+            ),
+        ]
+        patient = make_patient(
+            alerts=alerts,
+            recommendation_set=RecommendationSet(recommended_tests=["EKG", "CBC", "HbA1c"]),
+        )
+
+        assert len(patient.alerts) == 2
+        assert patient.alerts[0].alert_type == AlertType.OSA
+        assert patient.recommendation_set is not None
+        assert patient.recommendation_set.recommended_tests == ["EKG", "CBC", "HbA1c"]
 
     def test_created_by_holds_linked_user(self) -> None:
         user = make_user()
@@ -321,3 +351,82 @@ class TestRiskAssessment:
     def test_mets_capacity_accepts_enum_value(self) -> None:
         assessment = RiskAssessment(mets_capacity=MetsCapacity.BELOW_4)
         assert assessment.mets_capacity == MetsCapacity.BELOW_4
+
+
+class TestRecommendationSet:
+    def test_recommended_tests_defaults_to_empty_list(self) -> None:
+        assert RecommendationSet().recommended_tests == []
+
+    def test_generated_at_defaults_to_none(self) -> None:
+        assert RecommendationSet().generated_at is None
+
+    def test_recommended_tests_accepts_values(self) -> None:
+        recommendation_set = RecommendationSet(recommended_tests=["EKG", "CBC", "HbA1c"])
+        assert recommendation_set.recommended_tests == ["EKG", "CBC", "HbA1c"]
+
+
+def make_alert(**overrides: Any) -> Alert:
+    defaults: dict[str, Any] = {
+        "alert_type": AlertType.OSA,
+        "message": "STOP-Bang score 5",
+        "severity": AlertSeverity.CRITICAL,
+    }
+    defaults.update(overrides)
+    return Alert(**defaults)
+
+
+class TestAlert:
+    def test_creates_with_required_fields(self) -> None:
+        alert = make_alert()
+        assert alert.alert_type == AlertType.OSA
+        assert alert.severity == AlertSeverity.CRITICAL
+
+    def test_id_is_auto_generated(self) -> None:
+        alert = make_alert()
+        assert isinstance(alert.id, str)
+        assert alert.id != ""
+
+    def test_id_is_unique_per_instance(self) -> None:
+        assert make_alert().id != make_alert().id
+
+    def test_acknowledged_defaults_to_false(self) -> None:
+        alert = make_alert()
+        assert alert.acknowledged is False
+        assert alert.acknowledged_by is None
+        assert alert.acknowledged_at is None
+
+    def test_created_at_defaults_to_now(self) -> None:
+        assert make_alert().created_at is not None
+
+    def test_acknowledged_by_holds_actor_snapshot(self) -> None:
+        actor = make_actor_snapshot(full_name="Nora Nurse", role="nurse")
+        alert = make_alert(
+            acknowledged=True, acknowledged_by=actor, acknowledged_at=datetime.now(UTC)
+        )
+        assert alert.acknowledged is True
+        assert isinstance(alert.acknowledged_by, ActorSnapshot)
+        assert alert.acknowledged_by.full_name == "Nora Nurse"
+
+
+class TestAuditLogEntry:
+    def test_creates_with_required_fields(self) -> None:
+        actor = make_actor_snapshot()
+        entry = AuditLogEntry(
+            entity_type="Patient",
+            entity_id="PT-abc123",
+            action=AuditAction.UPDATE,
+            actor=actor,
+            changes={"before": {"is_deleted": False}, "after": {"is_deleted": True}},
+        )
+        assert entry.entity_type == "Patient"
+        assert entry.action == AuditAction.UPDATE
+        assert entry.actor.full_name == actor.full_name
+        assert entry.timestamp is not None
+
+    def test_declares_indexes_on_entity_id_and_timestamp(self) -> None:
+        indexed_fields = {index.fields for index in AuditLogEntry.get_settings().indexes}
+        assert ("entity_id",) in indexed_fields
+        assert ("timestamp",) in indexed_fields
+
+    def test_collection_name_is_audit_log(self) -> None:
+        assert AuditLogEntry.get_settings().name == "audit_log"

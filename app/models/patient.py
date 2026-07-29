@@ -7,7 +7,13 @@ from beanie import Document, Link, Save, before_event
 from pydantic import Field, field_validator
 from pymongo import IndexModel
 
-from app.models.embedded import ExamFinding, IntakeRecord, RiskAssessment
+from app.models.embedded import (
+    Alert,
+    ExamFinding,
+    IntakeRecord,
+    RecommendationSet,
+    RiskAssessment,
+)
 from app.models.user import User
 
 
@@ -31,10 +37,8 @@ class Patient(Document):
     intake_record: IntakeRecord | None = None
     exam_finding: ExamFinding | None = None
     risk_assessment: RiskAssessment | None = None
-
-    # Added in Step 1.5:
-    # recommendation_set: RecommendationSet | None = None
-    # alerts: list[Alert] = []
+    recommendation_set: RecommendationSet | None = None
+    alerts: list[Alert] = Field(default_factory=list)
 
     class Settings:
         name = "patients"
