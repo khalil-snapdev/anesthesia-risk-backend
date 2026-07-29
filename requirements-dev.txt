@@ -1,6 +1,10 @@
 -r requirements.txt
 pytest
 pytest-asyncio
+pytest-cov
 httpx
 black
 ruff
+mypy
+pip-audit
+pre-commit

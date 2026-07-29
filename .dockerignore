@@ -1,0 +1,17 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.git/
+.github/
+tests/
+.env
+.env.example
+.pre-commit-config.yaml
+README.md
+CLAUDE.md

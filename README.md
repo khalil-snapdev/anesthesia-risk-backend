@@ -25,7 +25,13 @@ Beanie ODM).
    cp .env.example .env
    ```
 
-4. Run the development server:
+4. Install the pre-commit hooks (runs ruff, black, and mypy on every commit):
+
+   ```bash
+   pre-commit install
+   ```
+
+5. Run the development server:
 
    ```bash
    uvicorn app.main:app --reload
@@ -39,8 +45,26 @@ The API will be available at `http://localhost:8000`. Check `http://localhost:80
 pytest
 ```
 
+Coverage is enforced at 80% (`pytest` fails below that threshold).
+
+## Type Checking, Linting, and Security Audit
+
+```bash
+mypy app tests
+ruff check .
+black --check .
+pip-audit
+```
+
+## Docker
+
+```bash
+docker build -t anesthesia-risk-backend .
+docker run -p 8000:8000 --env-file .env anesthesia-risk-backend
+```
+
 ## Project Status
 
-Currently on **Step 1.3 — core models (User, Patient)**. This project is
+Currently on **Step 1.4 — clinical models**. This project is
 being built in small, reviewed phases — see `CLAUDE.md` for the full
 roadmap and current phase.

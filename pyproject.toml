@@ -6,5 +6,14 @@ target-version = ["py311"]
 line-length = 100
 target-version = "py311"
 
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+addopts = "--cov=app --cov-report=term-missing --cov-fail-under=80"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]

@@ -26,9 +26,15 @@ jobs:
       - name: Run black
         run: black --check .
 
-      - name: Run pytest
+      - name: Run mypy
+        run: mypy app tests
+
+      - name: Run pip-audit
+        run: pip-audit
+
+      - name: Run pytest with coverage
         env:
           MONGODB_URI: "mongodb://localhost:27017/test"
           ENVIRONMENT: "test"
           LOG_LEVEL: "INFO"
-        run: pytest
+        run: pytest --cov=app --cov-report=term-missing

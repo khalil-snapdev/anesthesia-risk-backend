@@ -9,7 +9,8 @@ responses matching the shapes that frontend already expects.
 ## Tech Stack (locked in, do not change without asking)
 - Python, FastAPI (async)
 - MongoDB Atlas (mandated by team)
-- Beanie (async ODM, built on Motor + Pydantic)
+- Beanie (async ODM, built on PyMongo's native async driver — `pymongo.AsyncMongoClient` —
+  + Pydantic). Motor is deprecated (EOL May 2026) and no longer used.
 - Deployment target: Render
 - pytest + httpx for testing
 - black + ruff for formatting/linting
@@ -21,10 +22,10 @@ responses matching the shapes that frontend already expects.
 - User and AuditLogEntry are separate top-level collections (queried 
   independently across patients, not tied to a single patient view)
 - Audit log writes must happen inside the same MongoDB transaction as the 
-  patient document update they're logging, using Motor's session/transaction 
-  support (MongoDB Atlas replica sets support multi-document ACID 
-  transactions) — never write the audit entry as a separate, unguaranteed 
-  step
+  patient document update they're logging, using PyMongo's async 
+  session/transaction support (MongoDB Atlas replica sets support 
+  multi-document ACID transactions) — never write the audit entry as a 
+  separate, unguaranteed step
 
 ## Roles (exactly 3)
 1. Surgeon — views risk profile, decides on testing, views/writes notes. 
@@ -150,4 +151,4 @@ go-ahead before starting the next phase. Each phase should end with a
 passing test suite and a clean git status ready to commit.
 
 ## Current Phase
-Step 1.3 — core models (User, Patient)
+Step 1.4 — clinical models
