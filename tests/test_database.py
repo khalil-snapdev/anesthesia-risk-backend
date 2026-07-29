@@ -24,6 +24,21 @@ async def test_init_db_sets_client_on_app_state() -> None:
 
 
 @pytest.mark.asyncio
+async def test_init_db_constructs_client_with_tz_aware_true() -> None:
+    app = FastAPI()
+    fake_client = MagicMock()
+    fake_client.get_default_database.return_value = MagicMock()
+
+    with (
+        patch("app.database.AsyncMongoClient", return_value=fake_client) as mock_ctor,
+        patch("app.database.init_beanie", new=AsyncMock()),
+    ):
+        await init_db(app)
+
+    assert mock_ctor.call_args.kwargs["tz_aware"] is True
+
+
+@pytest.mark.asyncio
 async def test_init_db_raises_on_connection_failure() -> None:
     app = FastAPI()
 

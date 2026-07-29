@@ -151,4 +151,10 @@ go-ahead before starting the next phase. Each phase should end with a
 passing test suite and a clean git status ready to commit.
 
 ## Current Phase
-Step 1.6 — final Patient model review + basic CRUD smoke test
+Phase 1 (data model layer) is complete: User, Patient, and AuditLogEntry
+documents, all embedded clinical sub-documents (intake_record, exam_finding,
+risk_assessment, recommendation_set, alerts), unique constraints verified
+against live Atlas, and a full CRUD round-trip smoke test passing against
+the real dev database.
+
+Current: Phase 2 — Scoring engine (ASA, STOP-Bang, RCRI, METs) + unit tests

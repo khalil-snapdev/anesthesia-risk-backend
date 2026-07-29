@@ -19,6 +19,7 @@ async def init_db(app: FastAPI) -> None:
             minPoolSize=settings.MONGO_MIN_POOL_SIZE,
             serverSelectionTimeoutMS=settings.MONGO_SERVER_SELECTION_TIMEOUT_MS,
             connectTimeoutMS=settings.MONGO_CONNECT_TIMEOUT_MS,
+            tz_aware=True,
         )
         await init_beanie(
             database=mongo_client.get_default_database(),

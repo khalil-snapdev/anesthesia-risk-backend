@@ -65,6 +65,7 @@ docker run -p 8000:8000 --env-file .env anesthesia-risk-backend
 
 ## Project Status
 
-Currently on **Step 1.6 — final Patient model review + basic CRUD smoke test**. This project is
+Phase 1 (data model layer) is complete. Currently on **Phase 2 — Scoring
+engine (ASA, STOP-Bang, RCRI, METs) + unit tests**. This project is
 being built in small, reviewed phases — see `CLAUDE.md` for the full
 roadmap and current phase.
