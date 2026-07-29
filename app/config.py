@@ -1,7 +1,8 @@
 import secrets
+from typing import Annotated
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -31,6 +32,23 @@ class Settings(BaseSettings):
     # real, stable JWT_SECRET_KEY via the production environment.
     JWT_SECRET_KEY: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
     JWT_EXPIRY_MINUTES: int = 60 * 24
+
+    # Comma-separated in the environment (e.g. "http://a.com,http://b.com"),
+    # split into a list below. NoDecode tells pydantic-settings not to
+    # JSON-parse this as a complex type before our validator runs.
+    # Defaults to localhost-only so local dev is safe out of the box even
+    # if unset — production must set the real deployed Ember frontend
+    # URL(s).
+    ALLOWED_ORIGINS: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["http://localhost:5173", "http://localhost:3000"]
+    )
+
+    @field_validator("ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def split_comma_separated_origins(cls, value: str | list[str]) -> list[str]:
+        if isinstance(value, str):
+            return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
 
 
 settings = Settings()

@@ -3,9 +3,11 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pymongo import AsyncMongoClient
 
+from app.config import settings
 from app.database import close_db, get_db_client, init_db
 from app.exceptions import AppException
 from app.logging_config import configure_logging, get_logger
@@ -30,6 +32,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Anesthesia Risk Score 2.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH"],
+    allow_headers=["Authorization", "Content-Type"],
+)
 
 app.include_router(auth.router)
 app.include_router(patients.router)
