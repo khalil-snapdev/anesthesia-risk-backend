@@ -65,7 +65,7 @@ docker run -p 8000:8000 --env-file .env anesthesia-risk-backend
 
 ## Project Status
 
-Phase 1 (data model layer) is complete. Currently on **Phase 2 — Scoring
-engine (ASA, STOP-Bang, RCRI, METs) + unit tests**. This project is
-being built in small, reviewed phases — see `CLAUDE.md` for the full
-roadmap and current phase.
+Phase 1 (data model layer) and Phase 2 (scoring engine) are complete.
+Currently on **Phase 3 — API routes**. This project is being built in
+small, reviewed phases — see `CLAUDE.md` for the full roadmap and current
+phase.

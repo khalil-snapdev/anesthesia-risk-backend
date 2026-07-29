@@ -157,4 +157,9 @@ risk_assessment, recommendation_set, alerts), unique constraints verified
 against live Atlas, and a full CRUD round-trip smoke test passing against
 the real dev database.
 
-Current: Phase 2 — Scoring engine (ASA, STOP-Bang, RCRI, METs) + unit tests
+Phase 2 (scoring engine) is complete: pure-function implementations of
+STOP-Bang, RCRI, ASA suggestion, METs classification, overall-risk
+worst-of logic, alert generation, and recommended-test generation, all in
+app/services/, with no DB calls or routes — fully unit tested.
+
+Current: Phase 3 — API routes
