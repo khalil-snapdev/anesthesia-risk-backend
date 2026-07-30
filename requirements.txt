@@ -1,10 +1,10 @@
-fastapi
-uvicorn[standard]
-pydantic-settings
-pydantic[email]
-beanie
-pymongo>=4.15,<5
-google-auth
-pyjwt
-reportlab
-setuptools>=83.0.0  # PYSEC-2026-3447: pin patched version over CI's/Render's preinstalled vulnerable copy
+fastapi==0.141.1
+uvicorn[standard]==0.52.0
+pydantic-settings==2.14.2
+pydantic[email]==2.13.4
+beanie==2.1.0
+pymongo==4.17.0
+google-auth==2.56.2
+pyjwt==2.13.0
+reportlab==5.0.0
+setuptools==83.0.0  # PYSEC-2026-3447: pin patched version over CI's/Render's preinstalled vulnerable copy
