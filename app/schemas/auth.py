@@ -8,9 +8,10 @@ class GoogleLoginRequest(BaseModel):
 
 
 class GoogleLoginResponse(BaseModel):
-    access_token: str
     # null means the user hasn't picked a role yet — frontend shows
-    # /select-role in that case.
+    # /select-role in that case. The access token itself is set as an
+    # httpOnly cookie (see routers/auth.py), never returned in the body —
+    # a token readable by JS is a token stealable by XSS.
     role: str | None
 
 
@@ -19,7 +20,6 @@ class SelectRoleRequest(BaseModel):
 
 
 class SelectRoleResponse(BaseModel):
-    access_token: str
     role: str
 
 

@@ -39,6 +39,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["Authorization", "Content-Type"],
+    # Content-Disposition isn't in the CORS-safelisted response headers, so
+    # without this the frontend's PDF downloads can't read the real
+    # server-generated filename via response.headers.get(...).
+    expose_headers=["Content-Disposition"],
 )
 
 app.include_router(auth.router)

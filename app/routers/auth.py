@@ -1,12 +1,13 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from pymongo import AsyncMongoClient
 from pymongo.asynchronous.client_session import AsyncClientSession
 
 from app.auth.dependencies import get_current_user
 from app.auth.google_oauth import verify_google_token
 from app.auth.jwt_handler import create_access_token
+from app.config import settings
 from app.database import get_db_client
 from app.exceptions import AppException
 from app.models.audit_log import AuditAction
@@ -23,10 +24,32 @@ from app.services.audit import record_audit_entry, run_in_transaction
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+ACCESS_TOKEN_COOKIE = "access_token"
+
+
+def _set_access_token_cookie(response: Response, token: str) -> None:
+    # SameSite=None is required for the real cross-domain production
+    # deployment (frontend and backend on different domains), but browsers
+    # reject SameSite=None without Secure — and local dev usually has no
+    # HTTPS. Local dev's frontend/backend are both on localhost (different
+    # ports, but the same registrable domain), which browsers treat as
+    # same-site regardless of port, so Lax+non-Secure works fine there.
+    is_production = settings.ENVIRONMENT != "development"
+    response.set_cookie(
+        key=ACCESS_TOKEN_COOKIE,
+        value=token,
+        httponly=True,
+        secure=is_production,
+        samesite="none" if is_production else "lax",
+        max_age=settings.JWT_EXPIRY_MINUTES * 60,
+        path="/",
+    )
+
 
 @router.post("/google", response_model=GoogleLoginResponse)
 async def login_with_google(
     payload: GoogleLoginRequest,
+    response: Response,
     client: AsyncMongoClient[Any] = Depends(get_db_client),
 ) -> GoogleLoginResponse:
     """Verify a Google ID token, find-or-create the User, issue our JWT.
@@ -72,12 +95,14 @@ async def login_with_google(
 
     role_value = user.role.value if user.role else None
     access_token = create_access_token(user_id=str(user.id), role=role_value)
-    return GoogleLoginResponse(access_token=access_token, role=role_value)
+    _set_access_token_cookie(response, access_token)
+    return GoogleLoginResponse(role=role_value)
 
 
 @router.post("/select-role", response_model=SelectRoleResponse)
 async def select_role(
     payload: SelectRoleRequest,
+    response: Response,
     client: AsyncMongoClient[Any] = Depends(get_db_client),
     current_user: User = Depends(get_current_user),
 ) -> SelectRoleResponse:
@@ -108,7 +133,8 @@ async def select_role(
     await run_in_transaction(client, _txn)
 
     access_token = create_access_token(user_id=str(current_user.id), role=new_role.value)
-    return SelectRoleResponse(access_token=access_token, role=new_role.value)
+    _set_access_token_cookie(response, access_token)
+    return SelectRoleResponse(role=new_role.value)
 
 
 @router.get("/me", response_model=UserMeResponse)
@@ -119,3 +145,9 @@ async def get_me(current_user: User = Depends(get_current_user)) -> UserMeRespon
         full_name=current_user.full_name,
         role=current_user.role.value if current_user.role else None,
     )
+
+
+@router.post("/logout")
+async def logout(response: Response) -> dict[str, bool]:
+    response.delete_cookie(key=ACCESS_TOKEN_COOKIE, path="/")
+    return {"success": True}

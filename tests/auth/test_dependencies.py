@@ -1,9 +1,10 @@
 import asyncio
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
 from beanie import init_beanie
+from fastapi import Request
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.auth.dependencies import get_current_user, require_role
@@ -71,27 +72,79 @@ def _credentials_for(token: str) -> HTTPAuthorizationCredentials:
     return HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
 
 
+class _FakeRequest:
+    """Stands in for Starlette's Request — get_current_user only reads
+    .cookies, so that's all this needs to provide for direct (non-DI)
+    calls in tests.
+    """
+
+    def __init__(self, cookies: dict[str, str] | None = None) -> None:
+        self.cookies = cookies or {}
+
+
+def _fake_request(cookies: dict[str, str] | None = None) -> Request:
+    # get_current_user only ever reads .cookies off the request, so the
+    # fake satisfies its actual runtime contract even though it isn't a
+    # real Request — cast() tells mypy that's an intentional test double.
+    return cast(Request, _FakeRequest(cookies))
+
+
 class TestGetCurrentUser:
     @pytest.mark.asyncio
-    async def test_returns_user_for_valid_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_returns_user_for_valid_header_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         user = make_user()
         monkeypatch.setattr(User, "get", AsyncMock(return_value=user))
         token = create_access_token(user_id=str(user.id), role="nurse")
 
-        result = await get_current_user(credentials=_credentials_for(token))
+        result = await get_current_user(
+            request=_fake_request(), credentials=_credentials_for(token)
+        )
+
+        assert result is user
+
+    @pytest.mark.asyncio
+    async def test_returns_user_for_valid_cookie_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        user = make_user()
+        monkeypatch.setattr(User, "get", AsyncMock(return_value=user))
+        token = create_access_token(user_id=str(user.id), role="nurse")
+
+        result = await get_current_user(
+            request=_fake_request({"access_token": token}), credentials=None
+        )
+
+        assert result is user
+
+    @pytest.mark.asyncio
+    async def test_cookie_token_takes_precedence_over_header(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        user = make_user()
+        monkeypatch.setattr(User, "get", AsyncMock(return_value=user))
+        cookie_token = create_access_token(user_id=str(user.id), role="nurse")
+
+        result = await get_current_user(
+            request=_fake_request({"access_token": cookie_token}),
+            credentials=_credentials_for("a-bogus-header-token"),
+        )
 
         assert result is user
 
     @pytest.mark.asyncio
     async def test_raises_401_when_no_credentials_provided(self) -> None:
         with pytest.raises(AppException) as exc_info:
-            await get_current_user(credentials=None)
+            await get_current_user(request=_fake_request(), credentials=None)
         assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
     async def test_raises_401_for_invalid_token(self) -> None:
         with pytest.raises(AppException) as exc_info:
-            await get_current_user(credentials=_credentials_for("not-a-real-token"))
+            await get_current_user(
+                request=_fake_request(), credentials=_credentials_for("not-a-real-token")
+            )
         assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
@@ -100,7 +153,7 @@ class TestGetCurrentUser:
         token = create_access_token(user_id="507f1f77bcf86cd799439011", role="nurse")
 
         with pytest.raises(AppException) as exc_info:
-            await get_current_user(credentials=_credentials_for(token))
+            await get_current_user(request=_fake_request(), credentials=_credentials_for(token))
         assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
@@ -110,7 +163,7 @@ class TestGetCurrentUser:
         token = create_access_token(user_id=str(inactive_user.id), role="nurse")
 
         with pytest.raises(AppException) as exc_info:
-            await get_current_user(credentials=_credentials_for(token))
+            await get_current_user(request=_fake_request(), credentials=_credentials_for(token))
         assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
@@ -118,7 +171,7 @@ class TestGetCurrentUser:
         token = create_access_token(user_id="not-a-valid-object-id", role="nurse")
 
         with pytest.raises(AppException) as exc_info:
-            await get_current_user(credentials=_credentials_for(token))
+            await get_current_user(request=_fake_request(), credentials=_credentials_for(token))
         assert exc_info.value.status_code == 401
 
 

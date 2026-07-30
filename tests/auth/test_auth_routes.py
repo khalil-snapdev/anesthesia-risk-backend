@@ -143,12 +143,19 @@ class TestGoogleLogin:
 
         assert response.status_code == 200
         body = response.json()
-        assert body["role"] is None
-        assert body["access_token"]
+        assert body == {"role": None}
         insert_mock.assert_awaited_once()
 
-        decoded = jwt.decode(body["access_token"], settings.JWT_SECRET_KEY, algorithms=["HS256"])
+        cookie_token = response.cookies["access_token"]
+        decoded = jwt.decode(cookie_token, settings.JWT_SECRET_KEY, algorithms=["HS256"])
         assert decoded["role"] is None
+
+        # Local dev (ENVIRONMENT=development, the default here) uses
+        # Lax+non-Secure since frontend/backend share "localhost" as their
+        # registrable domain — see _set_access_token_cookie's docstring.
+        set_cookie_header = response.headers["set-cookie"].lower()
+        assert "httponly" in set_cookie_header
+        assert "samesite=lax" in set_cookie_header
 
         audit_mock.assert_awaited_once()
         audit_kwargs = audit_mock.call_args.kwargs
@@ -225,9 +232,10 @@ class TestSelectRole:
 
         assert response.status_code == 200
         body = response.json()
-        assert body["role"] == "nurse"
+        assert body == {"role": "nurse"}
 
-        decoded = jwt.decode(body["access_token"], settings.JWT_SECRET_KEY, algorithms=["HS256"])
+        cookie_token = response.cookies["access_token"]
+        decoded = jwt.decode(cookie_token, settings.JWT_SECRET_KEY, algorithms=["HS256"])
         assert decoded["role"] == "nurse"
 
         audit_mock.assert_awaited_once()
@@ -312,3 +320,29 @@ class TestGetMe:
         response = await client.get("/auth/me")
 
         assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_authenticates_via_cookie_without_authorization_header(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        user = make_user(role=Role.NURSE)
+        monkeypatch.setattr(User, "get", AsyncMock(return_value=user))
+        token = create_access_token(user_id=str(user.id), role="nurse")
+
+        response = await client.get("/auth/me", headers={"Cookie": f"access_token={token}"})
+
+        assert response.status_code == 200
+        assert response.json()["role"] == "nurse"
+
+
+class TestLogout:
+    @pytest.mark.asyncio
+    async def test_clears_the_access_token_cookie(self, client: AsyncClient) -> None:
+        response = await client.post("/auth/logout")
+
+        assert response.status_code == 200
+        assert response.json() == {"success": True}
+
+        set_cookie_header = response.headers["set-cookie"].lower()
+        assert "access_token=" in set_cookie_header
+        assert "max-age=0" in set_cookie_header
