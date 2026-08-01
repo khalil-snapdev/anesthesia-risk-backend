@@ -11,7 +11,7 @@ from app.config import settings
 from app.database import close_db, get_db_client, init_db
 from app.exceptions import AppException
 from app.logging_config import configure_logging, get_logger
-from app.routers import auth, patients
+from app.routers import auth, mock_truform, patients
 
 configure_logging()
 logger = get_logger(__name__)
@@ -47,6 +47,12 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(patients.router)
+
+# Fake stand-in for the real Truform API (no real credentials for this
+# practice project) — must never exist in a real deployment. See
+# app/routers/mock_truform.py's module docstring for the full rationale.
+if settings.ENVIRONMENT != "production":
+    app.include_router(mock_truform.router)
 
 
 @app.exception_handler(AppException)

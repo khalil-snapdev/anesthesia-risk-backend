@@ -56,6 +56,13 @@ class IntakeRecord(BaseModel):
     verification_status: VerificationStatus = VerificationStatus.PENDING
     submitted_at: datetime
     source: IntakeSource
+    # Truform's own submission id — only ever set for source=truform (both
+    # the manual single-payload upload and the poll-based auto-import).
+    # This is what makes POST /patients/poll-truform idempotent: a
+    # submission already linked to a patient is reported as
+    # already-imported rather than creating a duplicate. None for manual
+    # (non-Truform) intake, which has no submission id to track.
+    submission_id: str | None = None
 
 
 class ExamFinding(BaseModel):

@@ -132,6 +132,32 @@ regardless of individual scores.
   missing fields and allow manual entry as fallback. Real PBHS field 
   names confirmed for scoring-relevant fields — see 
   app/services/truform_parser.py.
+  - **Simulated via a mock API** (app/routers/mock_truform.py):
+    real Truform API credentials aren't available for this practice
+    project, so `fetch_pending_submissions()`
+    (app/services/truform_client.py) polls a mock endpoint we host
+    ourselves instead of Truform's real servers. The mock's sample
+    submissions use the same real, researched PBHS field names as
+    truform_parser.py expects — nothing about parsing/normalization is
+    simplified or faked, only the transport is. Swapping to real
+    Truform later means changing `MOCK_TRUFORM_BASE_URL`
+    (app/config.py) to Truform's real polling endpoint and adding real
+    auth headers in truform_client.py — nothing downstream (parsing,
+    idempotency, patient creation) changes. The mock router is mounted
+    only when `ENVIRONMENT != "production"` (app/main.py) and additionally
+    gated to loopback callers as defense in depth
+    (`_require_internal_caller`) — it must never exist in a real
+    deployment; when real credentials arrive, delete
+    app/routers/mock_truform.py entirely rather than leaving it mounted
+    behind a flag.
+  - **Idempotent polling**: `IntakeRecord.submission_id` tracks which
+    Truform submission produced a given patient (None for manually
+    uploaded intake, which has no submission id). POST
+    /patients/poll-truform checks for an existing patient with that
+    submission_id before creating one — already-imported submissions are
+    reported back distinctly (`already_imported`) rather than silently
+    skipped or duplicated. This is what makes clicking "poll" twice, or
+    retrying after a partial failure, safe.
 - **OMS Vision**: outbound only — real practice management/EHR software 
   (Henry Schein One). No public API exists for direct integration. This 
   backend's only job is to generate clean, well-formatted PDFs (risk 
@@ -269,7 +295,29 @@ constructed entry is never visible to the mock) — added a
 record_audit_entry-patching helper to both test files so tests can assert
 directly on entity_type/action/actor/changes.
 
-## Phase 1-8 Summary (quick reference)
+Phase 9 (Truform mock integration + idempotent polling) is complete:
+app/routers/mock_truform.py simulates the real Truform API (no real
+credentials for this practice project) with realistic sample submissions
+using real researched PBHS field names — mounted only when
+ENVIRONMENT != "production", plus a loopback-only guard as defense in
+depth. app/services/truform_client.py's fetch_pending_submissions() now
+makes a real internal httpx call to the mock instead of returning a
+hardcoded empty list, and gracefully returns an empty list (logged, not
+raised) on network errors, non-2xx responses, or unexpectedly-shaped
+data — a Truform/mock outage doesn't break the poll flow. Added
+IntakeRecord.submission_id (None for manually-uploaded intake) so
+POST /patients/poll-truform can check for an already-imported submission
+before creating a patient — already-imported ones are reported under a
+new `already_imported` field (TruformPollResponse) rather than silently
+skipped or duplicated. poll-truform also now processes every pending
+submission per call, not just the first (revisit if per-submission
+surgery dates/created_by are ever needed — today's single
+surgery_date/created_by still applies to the whole batch). Added an
+explicit idempotency test: the same submission_id polled twice creates a
+patient once, then reports already_imported on the second call, with
+Patient.insert asserted as never called for it.
+
+## Phase 1-9 Summary (quick reference)
 
 - **Phase 1** — Data model layer: User, Patient, and AuditLogEntry
   documents, plus all embedded clinical sub-documents.
@@ -293,6 +341,11 @@ directly on entity_type/action/actor/changes.
   audit diffs (patient creation, calculate-risk, alert acknowledgment),
   added User-entity audit logging to auth.py, added the
   GET /patients/{id}/audit-log read endpoint.
+- **Phase 9** — Truform mock integration + idempotent polling: mock
+  Truform API (non-production only, loopback-gated), real
+  fetch_pending_submissions() with graceful-failure handling,
+  IntakeRecord.submission_id-based idempotency so poll-truform never
+  creates duplicate patients on repeated/retried polls.
 
 Current: Backend feature-complete — next: deploy to Render, then connect
 Ember frontend to real API

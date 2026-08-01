@@ -63,3 +63,21 @@ class TruformIngestSkipped(BaseModel):
 class TruformIngestResponse(BaseModel):
     created: list[TruformIngestResult]
     skipped: list[TruformIngestSkipped]
+
+
+class TruformAlreadyImported(BaseModel):
+    """One pending submission that was already imported on a prior poll.
+
+    Reported instead of silently skipping it or creating a duplicate —
+    this is what makes repeated/retried polling safe (idempotent).
+    """
+
+    submission_id: str
+    patient_id: str
+    patient_name: str
+
+
+class TruformPollResponse(BaseModel):
+    created: list[TruformIngestResult]
+    skipped: list[TruformIngestSkipped]
+    already_imported: list[TruformAlreadyImported]

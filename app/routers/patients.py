@@ -35,11 +35,13 @@ from app.schemas.patient import (
     PatientRead,
 )
 from app.schemas.truform import (
+    TruformAlreadyImported,
     TruformIngestResponse,
     TruformIngestResult,
     TruformIngestSkipped,
     TruformManualIngestRequest,
     TruformPollRequest,
+    TruformPollResponse,
 )
 from app.services.alerts import generate_alerts, merge_alerts
 from app.services.audit import record_audit_entry, run_in_transaction
@@ -94,13 +96,21 @@ def _sex_from_is_male(is_male: bool | None) -> Sex:
 
 
 def _build_patient_from_parsed_intake(
-    parsed: ParsedIntakeData, surgery_date: date, owner: User
+    parsed: ParsedIntakeData,
+    surgery_date: date,
+    owner: User,
+    submission_id: str | None = None,
 ) -> Patient:
     """Build an unsaved Patient from a parsed Truform submission.
 
     Raises ValueError (caught by callers and reported as a skipped
     submission) if the data can't satisfy Patient's required fields —
     Truform's researched fields don't guarantee a parseable name or dob.
+
+    submission_id is None for the manual single-payload upload path
+    (POST /patients/from-truform has no submission id to track) and set
+    for the poll-based auto-import path, where it's what makes re-polling
+    idempotent — see IntakeRecord.submission_id's docstring.
     """
     if not parsed.full_name:
         raise ValueError("Truform submission is missing a patient name")
@@ -119,6 +129,7 @@ def _build_patient_from_parsed_intake(
         verification_status=VerificationStatus.PENDING,
         submitted_at=datetime.now(UTC),
         source=IntakeSource.TRUFORM,
+        submission_id=submission_id,
     )
 
     return Patient(
@@ -137,8 +148,9 @@ async def _create_patient_from_truform(
     surgery_date: date,
     owner: User,
     actor: ActorSnapshot,
+    submission_id: str | None = None,
 ) -> TruformIngestResult:
-    patient = _build_patient_from_parsed_intake(parsed, surgery_date, owner)
+    patient = _build_patient_from_parsed_intake(parsed, surgery_date, owner, submission_id)
 
     async def _txn(session: AsyncClientSession) -> Patient:
         await patient.insert(session=session)
@@ -157,6 +169,7 @@ async def _create_patient_from_truform(
                     "surgery_date": patient.surgery_date.isoformat(),
                     "patient_identifier": patient.patient_identifier,
                     "source": "truform",
+                    "submission_id": submission_id,
                 },
             },
         )
@@ -528,21 +541,28 @@ async def create_patient_from_truform(
     return TruformIngestResponse(created=[result], skipped=[])
 
 
-@router.post("/poll-truform", response_model=TruformIngestResponse)
+@router.post("/poll-truform", response_model=TruformPollResponse)
 async def poll_truform(
     payload: TruformPollRequest,
     client: AsyncMongoClient[Any] = Depends(get_db_client),
-) -> TruformIngestResponse:
-    """Poll Truform for pending submissions and create a Patient per result.
+) -> TruformPollResponse:
+    """Poll Truform for pending submissions and create a Patient per new one.
 
-    fetch_pending_submissions() is currently stubbed to return an empty
-    list pending real Truform API credentials, so this returns an empty
-    `created` list for now — that's expected and correct until real
-    credentials exist.
+    Idempotent per submission_id: every pending submission is checked
+    against existing patients' intake_record.submission_id BEFORE
+    attempting to create one. Already-imported submissions are reported
+    under `already_imported`, never re-created — safe to click "poll"
+    repeatedly (e.g. a double-click, or retrying after a partial failure)
+    without ever producing duplicate patients. The mock Truform endpoint
+    deliberately never marks its submissions "consumed" on its own side
+    (see mock_truform.py) — this idempotency check is what makes repeated
+    polling safe, mirroring how a real integration would need to behave
+    too (Truform has no concept of "this office already imported this").
 
-    surgery_date/created_by apply to a single patient, so at most the
-    first pending submission is processed per call — see
-    TruformPollRequest's docstring for why.
+    surgery_date/created_by are shared across every submission processed
+    in one call — per TruformPollRequest's docstring, this is a
+    simplification (one "batch auto-import" action, not per-submission
+    scheduling); revisit if per-submission surgery dates are ever needed.
     """
     owner = await _get_user_or_404(payload.created_by)
     actor = _actor_snapshot_for_user(owner)
@@ -551,12 +571,28 @@ async def poll_truform(
 
     created: list[TruformIngestResult] = []
     skipped: list[TruformIngestSkipped] = []
+    already_imported: list[TruformAlreadyImported] = []
 
-    for raw_submission in pending_submissions[:1]:
-        parsed = parse_truform_payload(raw_submission)
+    for submission in pending_submissions:
+        # Raw dict query (not Patient.intake_record.submission_id == ...)
+        # since intake_record is an embedded (not linked) document — this
+        # is plain Mongo dot-notation, guaranteed to work regardless of
+        # Beanie's embedded-field query-expression support.
+        existing = await Patient.find_one({"intake_record.submission_id": submission.submission_id})
+        if existing is not None:
+            already_imported.append(
+                TruformAlreadyImported(
+                    submission_id=submission.submission_id,
+                    patient_id=str(existing.id),
+                    patient_name=existing.full_name,
+                )
+            )
+            continue
+
+        parsed = parse_truform_payload(submission.payload)
         try:
             result = await _create_patient_from_truform(
-                client, parsed, payload.surgery_date, owner, actor
+                client, parsed, payload.surgery_date, owner, actor, submission.submission_id
             )
         except ValueError as exc:
             skipped.append(
@@ -565,7 +601,7 @@ async def poll_truform(
             continue
         created.append(result)
 
-    return TruformIngestResponse(created=created, skipped=skipped)
+    return TruformPollResponse(created=created, skipped=skipped, already_imported=already_imported)
 
 
 @router.patch("/{patient_id}/notes", response_model=PatientRead)

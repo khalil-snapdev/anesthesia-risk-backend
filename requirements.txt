@@ -7,4 +7,5 @@ pymongo==4.17.0
 google-auth==2.56.2
 pyjwt==2.13.0
 reportlab==5.0.0
+httpx==0.28.1  # truform_client.py's internal call to the (mock, for now) Truform poll endpoint
 setuptools==83.0.0  # PYSEC-2026-3447: pin patched version over CI's/Render's preinstalled vulnerable copy

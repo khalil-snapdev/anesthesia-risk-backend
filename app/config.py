@@ -50,5 +50,13 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
 
+    # Internal base URL truform_client.py polls for pending submissions.
+    # Today this points at our own mock (app/routers/mock_truform.py,
+    # simulating the external Truform API since we don't have real
+    # credentials for this practice project) — swapping to real Truform
+    # later means changing only this value (and adding real auth headers
+    # in truform_client.py), never the parsing/normalization logic.
+    MOCK_TRUFORM_BASE_URL: str = "http://127.0.0.1:8000"
+
 
 settings = Settings()

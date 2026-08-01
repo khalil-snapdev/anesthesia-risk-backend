@@ -47,6 +47,11 @@ class Patient(Document):
             IndexModel("patient_identifier", unique=True),
             IndexModel("surgery_date"),
             IndexModel("is_deleted"),
+            # Speeds up the poll-truform idempotency check (find-by-
+            # submission_id before creating). Not unique: most patients
+            # have no submission_id (None), and Mongo allows any number of
+            # documents where an indexed field is null/missing.
+            IndexModel("intake_record.submission_id"),
         ]
 
     @field_validator("dob")

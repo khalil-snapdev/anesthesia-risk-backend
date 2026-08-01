@@ -26,6 +26,7 @@ from app.models.embedded import (
 from app.models.patient import Sex
 from app.models.user import Role
 from app.routers import patients as patients_router
+from app.services.truform_client import TruformSubmission
 
 
 class _FakeCollection:
@@ -948,6 +949,9 @@ class TestCreatePatientFromTruform:
             "surgery_date": "2026-09-01",
             "patient_identifier": result["patient"]["patient_identifier"],
             "source": "truform",
+            # None here (not a real id) — this is the manual single-payload
+            # upload path, which has no Truform submission_id to track.
+            "submission_id": None,
         }
 
     @pytest.mark.asyncio
@@ -1064,11 +1068,14 @@ class TestCreatePatientFromTruform:
 
 class TestPollTruform:
     @pytest.mark.asyncio
-    async def test_returns_empty_created_list_since_fetch_is_stubbed(
+    async def test_returns_empty_lists_when_no_submissions_are_pending(
         self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         owner = make_user()
         monkeypatch.setattr(User, "get", AsyncMock(return_value=owner))
+        monkeypatch.setattr(
+            patients_router, "fetch_pending_submissions", AsyncMock(return_value=[])
+        )
 
         response = await client.post(
             "/patients/poll-truform",
@@ -1076,7 +1083,7 @@ class TestPollTruform:
         )
 
         assert response.status_code == 200
-        assert response.json() == {"created": [], "skipped": []}
+        assert response.json() == {"created": [], "skipped": [], "already_imported": []}
 
     @pytest.mark.asyncio
     async def test_returns_404_when_created_by_user_missing(
@@ -1099,10 +1106,15 @@ class TestPollTruform:
         monkeypatch.setattr(User, "get", AsyncMock(return_value=owner))
         _patch_writes_as_no_ops(monkeypatch)
         audit_mock = _mock_record_audit_entry(monkeypatch)
+        monkeypatch.setattr(Patient, "find_one", AsyncMock(return_value=None))
         monkeypatch.setattr(
             patients_router,
             "fetch_pending_submissions",
-            AsyncMock(return_value=[_sample_truform_payload()]),
+            AsyncMock(
+                return_value=[
+                    TruformSubmission(submission_id="sub-1", payload=_sample_truform_payload())
+                ]
+            ),
         )
 
         response = await client.post(
@@ -1115,12 +1127,14 @@ class TestPollTruform:
         assert len(body["created"]) == 1
         assert body["created"][0]["patient"]["full_name"] == "John Doe"
         assert body["skipped"] == []
+        assert body["already_imported"] == []
 
         audit_mock.assert_awaited_once()
         audit_kwargs = audit_mock.call_args.kwargs
         assert audit_kwargs["action"] == AuditAction.CREATE
         assert audit_kwargs["entity_type"] == "Patient"
         assert audit_kwargs["changes"]["after"]["source"] == "truform"
+        assert audit_kwargs["changes"]["after"]["submission_id"] == "sub-1"
 
     @pytest.mark.asyncio
     async def test_skips_pending_submission_missing_a_derivable_name(
@@ -1129,13 +1143,16 @@ class TestPollTruform:
         owner = make_user()
         monkeypatch.setattr(User, "get", AsyncMock(return_value=owner))
         _patch_writes_as_no_ops(monkeypatch)
+        monkeypatch.setattr(Patient, "find_one", AsyncMock(return_value=None))
         unnamed_submission = _sample_truform_payload()
         del unnamed_submission["patient_self_first_name"]
         del unnamed_submission["patient_self_last_name"]
         monkeypatch.setattr(
             patients_router,
             "fetch_pending_submissions",
-            AsyncMock(return_value=[unnamed_submission]),
+            AsyncMock(
+                return_value=[TruformSubmission(submission_id="sub-2", payload=unnamed_submission)]
+            ),
         )
 
         response = await client.post(
@@ -1148,6 +1165,132 @@ class TestPollTruform:
         assert body["created"] == []
         assert len(body["skipped"]) == 1
         assert "name" in body["skipped"][0]["reason"]
+        assert body["already_imported"] == []
+
+    @pytest.mark.asyncio
+    async def test_processes_multiple_pending_submissions_in_one_call(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        owner = make_user()
+        monkeypatch.setattr(User, "get", AsyncMock(return_value=owner))
+        _patch_writes_as_no_ops(monkeypatch)
+        monkeypatch.setattr(Patient, "find_one", AsyncMock(return_value=None))
+        monkeypatch.setattr(
+            patients_router,
+            "fetch_pending_submissions",
+            AsyncMock(
+                return_value=[
+                    TruformSubmission(
+                        submission_id="sub-a",
+                        payload=_sample_truform_payload(patient_self_first_name="Alice"),
+                    ),
+                    TruformSubmission(
+                        submission_id="sub-b",
+                        payload=_sample_truform_payload(patient_self_first_name="Bob"),
+                    ),
+                ]
+            ),
+        )
+
+        response = await client.post(
+            "/patients/poll-truform",
+            json={"surgery_date": "2026-09-01", "created_by": str(owner.id)},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body["created"]) == 2
+        assert {p["patient"]["full_name"] for p in body["created"]} == {"Alice Doe", "Bob Doe"}
+        assert body["skipped"] == []
+        assert body["already_imported"] == []
+
+    @pytest.mark.asyncio
+    async def test_skips_already_imported_submission_without_creating_duplicate(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The core idempotency guarantee: a submission_id already linked
+        to an existing patient is reported as already_imported and never
+        re-created — Patient.insert must not even be called for it."""
+        owner = make_user()
+        monkeypatch.setattr(User, "get", AsyncMock(return_value=owner))
+        insert_mock = AsyncMock(return_value=None)
+        monkeypatch.setattr(Patient, "insert", insert_mock)
+        monkeypatch.setattr(AuditLogEntry, "insert", AsyncMock(return_value=None))
+
+        existing_patient = make_patient(full_name="Previously Imported")
+        monkeypatch.setattr(Patient, "find_one", AsyncMock(return_value=existing_patient))
+        monkeypatch.setattr(
+            patients_router,
+            "fetch_pending_submissions",
+            AsyncMock(
+                return_value=[
+                    TruformSubmission(submission_id="sub-3", payload=_sample_truform_payload())
+                ]
+            ),
+        )
+
+        response = await client.post(
+            "/patients/poll-truform",
+            json={"surgery_date": "2026-09-01", "created_by": str(owner.id)},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["created"] == []
+        assert body["skipped"] == []
+        assert body["already_imported"] == [
+            {
+                "submission_id": "sub-3",
+                "patient_id": str(existing_patient.id),
+                "patient_name": "Previously Imported",
+            }
+        ]
+        insert_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_second_poll_of_the_same_submission_reports_already_imported(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """End-to-end idempotency across two actual requests: polling the
+        same submission_id twice creates a patient on the first call and
+        reports it as already-imported (not duplicated) on the second —
+        the scenario a real double-click or accidental retry produces."""
+        owner = make_user()
+        monkeypatch.setattr(User, "get", AsyncMock(return_value=owner))
+        _patch_writes_as_no_ops(monkeypatch)
+        submission = TruformSubmission(submission_id="sub-4", payload=_sample_truform_payload())
+        monkeypatch.setattr(
+            patients_router, "fetch_pending_submissions", AsyncMock(return_value=[submission])
+        )
+
+        # First poll: no existing patient yet -> creates one.
+        monkeypatch.setattr(Patient, "find_one", AsyncMock(return_value=None))
+        first_response = await client.post(
+            "/patients/poll-truform",
+            json={"surgery_date": "2026-09-01", "created_by": str(owner.id)},
+        )
+        assert first_response.status_code == 200
+        first_body = first_response.json()
+        assert len(first_body["created"]) == 1
+        assert first_body["already_imported"] == []
+
+        # Second poll of the same submission_id: find_one now resolves to
+        # the patient just created (simulated directly, since Patient.insert
+        # is mocked as a no-op and never actually persists to a real DB).
+        already_created_patient = make_patient(full_name="John Doe")
+        monkeypatch.setattr(Patient, "find_one", AsyncMock(return_value=already_created_patient))
+
+        second_response = await client.post(
+            "/patients/poll-truform",
+            json={"surgery_date": "2026-09-01", "created_by": str(owner.id)},
+        )
+        assert second_response.status_code == 200
+        second_body = second_response.json()
+        assert second_body["created"] == []
+        assert second_body["skipped"] == []
+        assert len(second_body["already_imported"]) == 1
+        assert second_body["already_imported"][0]["submission_id"] == "sub-4"
+        assert second_body["already_imported"][0]["patient_name"] == "John Doe"
 
 
 class TestExportRiskReport:
