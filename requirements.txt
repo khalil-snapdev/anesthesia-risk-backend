@@ -5,6 +5,7 @@ pydantic[email]==2.13.4
 beanie==2.1.0
 pymongo==4.17.0
 google-auth==2.56.2
+requests==2.34.2  # google.auth.transport.requests hard-imports this; not a transitive install anywhere else
 pyjwt==2.13.0
 reportlab==5.0.0
 httpx==0.28.1  # truform_client.py's internal call to the (mock, for now) Truform poll endpoint
